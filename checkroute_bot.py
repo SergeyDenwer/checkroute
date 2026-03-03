@@ -12,7 +12,7 @@ CheckRoute — Telegram бот для проверки состояния мар
 import os
 import logging
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 # Дефолтные настройки
 DEFAULT_SAMPLE_KM = 5.0
 DEFAULT_SOIL = "loam"
+ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,6 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Просто отправь GPX файл\n\n"
         "<b>Команды:</b>\n"
         "/soil — выбрать тип почвы\n"
+        "/batch — сводка по всем маршрутам\n"
         "/help — справка\n\n"
         f"Тип почвы: <b>{SOIL_PARAMS_TABLE[DEFAULT_SOIL]['name']}</b>",
         parse_mode='HTML'
@@ -66,7 +68,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛤 <b>CheckRoute — Справка</b>\n\n"
         "<b>Как использовать:</b>\n"
-        "Отправь GPX файл → получи отчёт\n\n"
+        "Отправь GPX файл → получи отчёт\n"
+        "/batch — сводка по популярным маршрутам "
+        "(сейчас · завтра · суббота)\n\n"
         "<b>Типы почвы:</b>\n"
         f"{soil_list}\n\n"
         "<b>Выбрать почву:</b>\n"
@@ -286,6 +290,149 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     return "\n".join(report)
 
 
+def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
+    """Анализ одного маршрута для сводки. Возвращает dict или None."""
+    points = parse_gpx(gpx_path)
+    if not points:
+        return None
+
+    sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
+
+    # Текущее состояние по каждой точке
+    results = []
+    for lat, lon, elev, dist_km in sampled:
+        try:
+            weather = fetch_weather_data(lat, lon, days_back=14)
+            state = simulate_moisture(weather, soil_params)
+            status_label, status_key = get_status(state["moisture"], state["capacity"])
+            results.append({
+                "lat": lat, "lon": lon, "elevation": elev,
+                "distance_km": dist_km,
+                "moisture": state["moisture"],
+                "capacity": state["capacity"],
+                "days_dry": state["days_dry"],
+                "snow_cover": state["snow_cover"],
+                "status_label": status_label,
+                "status_key": status_key,
+            })
+        except Exception:
+            pass
+
+    if not results:
+        return None
+
+    # Агрегация текущего состояния
+    agg = aggregate_status(results)
+    today_dry = agg.get("dry", {}).get("percent", 0)
+    today_wet = agg.get("wet", {}).get("percent", 0)
+    today_mud = agg.get("mud", {}).get("percent", 0)
+    today_swamp = agg.get("swamp", {}).get("percent", 0)
+    _, _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
+
+    # Прогноз — берём меньше точек чтобы не долбить API
+    tomorrow_dry = today_dry
+    saturday_dry = today_dry
+    forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
+    if forecast_info and forecast_info.get("daily_stats"):
+        for ds in forecast_info["daily_stats"]:
+            ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
+            if ds_date == tomorrow:
+                tomorrow_dry = ds["dry_pct"]
+            if ds_date == saturday:
+                saturday_dry = ds["dry_pct"]
+
+    return {
+        "today_dry": today_dry,
+        "today_level": today_level,
+        "tomorrow_dry": tomorrow_dry,
+        "saturday_dry": saturday_dry,
+    }
+
+
+async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /batch — сводка по всем маршрутам из папки routes/"""
+    if not os.path.isdir(ROUTES_DIR):
+        await update.message.reply_text("❌ Папка routes/ не найдена")
+        return
+
+    gpx_files = sorted(f for f in os.listdir(ROUTES_DIR) if f.lower().endswith('.gpx'))
+    if not gpx_files:
+        await update.message.reply_text("❌ В папке routes/ нет GPX файлов")
+        return
+
+    soil_type = context.user_data.get('soil', DEFAULT_SOIL)
+    soil_params = get_soil_params(soil_type)
+
+    # Целевые даты
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+    days_to_sat = (5 - today.weekday()) % 7
+    # Если суббота <= завтра — берём следующую, чтобы все 3 колонки были разными
+    saturday = today + timedelta(days=days_to_sat if days_to_sat > 1 else days_to_sat + 7)
+
+    status_msg = await update.message.reply_text(
+        f"📊 Анализирую {len(gpx_files)} маршрутов...\n"
+        f"🌍 {soil_params['name']}\n\n"
+        f"Это займёт несколько минут ☕"
+    )
+
+    route_results = []
+
+    for file_idx, gpx_file in enumerate(gpx_files):
+        route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
+        gpx_path = os.path.join(ROUTES_DIR, gpx_file)
+
+        try:
+            await status_msg.edit_text(
+                f"📊 Анализирую ({file_idx + 1}/{len(gpx_files)})...\n"
+                f"🔍 {route_name}"
+            )
+        except Exception:
+            pass
+
+        try:
+            result = analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday)
+            if result:
+                result["name"] = route_name
+                route_results.append(result)
+        except Exception as e:
+            logger.error(f"Batch error for {gpx_file}: {e}")
+
+    if not route_results:
+        await status_msg.edit_text("❌ Не удалось проанализировать ни одного маршрута")
+        return
+
+    # Сортируем: лучшие сверху
+    route_results.sort(key=lambda r: r["today_dry"], reverse=True)
+
+    # Формируем отчёт
+    sat_label = f"Сб {saturday.strftime('%d.%m')}"
+
+    lines = []
+    lines.append(f"<b>📊 Сводка по {len(route_results)} маршрутам</b>")
+    lines.append(f"🌍 {soil_params['name']} | 📅 {today.strftime('%d.%m.%Y')}")
+    lines.append(f"<i>% сухо: Сейчас · Завтра · {sat_label}</i>")
+    lines.append("")
+
+    verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
+    counts = {4: 0, 3: 0, 2: 0, 1: 0}
+
+    for r in route_results:
+        e = verdict_emoji.get(r["today_level"], "❓")
+        counts[r["today_level"]] += 1
+        lines.append(
+            f"{e} {r['name']} — "
+            f"{r['today_dry']:.0f}% · {r['tomorrow_dry']:.0f}% · {r['saturday_dry']:.0f}%"
+        )
+
+    lines.append("")
+    lines.append(
+        f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]}"
+    )
+
+    await status_msg.edit_text("\n".join(lines), parse_mode='HTML')
+
+
 def main():
     """Запуск бота"""
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -304,6 +451,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("soil", soil_command))
+    app.add_handler(CommandHandler("batch", batch_command))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_gpx))
     
     # Запускаем
