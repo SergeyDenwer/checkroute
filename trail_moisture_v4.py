@@ -19,14 +19,6 @@ from collections import defaultdict
 # Порог дождя для сброса счётчика дней
 RAIN_THRESHOLD = 3.0  # мм
 
-# Параметры почвы по умолчанию (суглинок)
-DEFAULT_SOIL_PARAMS = {
-    "name": "Суглинок (loam)",
-    "desorptivity": 3.5,
-    "capacity": 15.0,
-    "stage1_ratio": 0.5,
-}
-
 SOIL_PARAMS_TABLE = {
     "sand": {"name": "Песок (sand)", "desorptivity": 4.5, "capacity": 10.0, "stage1_ratio": 0.5},
     "sandy_loam": {"name": "Супесь (sandy loam)", "desorptivity": 4.0, "capacity": 12.0, "stage1_ratio": 0.5},
@@ -120,7 +112,7 @@ def get_soil_params(soil_type=None):
     """Возвращает параметры почвы."""
     if soil_type and soil_type in SOIL_PARAMS_TABLE:
         return SOIL_PARAMS_TABLE[soil_type].copy()
-    return DEFAULT_SOIL_PARAMS.copy()
+    return SOIL_PARAMS_TABLE["loam"].copy()
 
 
 def fetch_weather_data(lat, lon, days_back=14):
@@ -172,122 +164,100 @@ def fetch_forecast(lat, lon, days_ahead=16):
     return response.json()
 
 
-def simulate_moisture(weather_data, soil_params):
-    """Симуляция влажности поверхностного слоя"""
-    daily = weather_data["daily"]
-    
+def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, days_since_rain, soil_params):
+    """Один шаг симуляции влажности (один день)."""
     DESORPTIVITY = soil_params["desorptivity"]
     CAPACITY = soil_params["capacity"]
     STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
-    
+
+    snowfall_mm = snowfall_cm * 10
+    water_input = rain
+
+    snow_cover += snowfall_mm
+    if temp_mean > 0 and snow_cover > 0:
+        melt_potential = temp_mean * 3.0
+        snow_water = snow_cover * 0.1
+        actual_melt = min(snow_water, melt_potential)
+        snow_cover -= actual_melt * 10
+        snow_cover = max(0, snow_cover)
+        water_input += actual_melt
+
+    if water_input >= RAIN_THRESHOLD:
+        days_since_rain = 1
+    else:
+        days_since_rain += 1
+
+    if snow_cover > 5:
+        evaporation = 0.05
+    elif surface_moisture > STAGE1_THRESHOLD:
+        evaporation = eto * 0.9
+    else:
+        str_factor = math.sqrt(days_since_rain) - math.sqrt(days_since_rain - 1)
+        evaporation = DESORPTIVITY * str_factor
+
+    evaporation = min(evaporation, surface_moisture)
+    surface_moisture = surface_moisture + water_input - evaporation
+    surface_moisture = max(0, min(surface_moisture, CAPACITY))
+
+    return surface_moisture, snow_cover, days_since_rain
+
+
+def simulate_moisture(weather_data, soil_params):
+    """Симуляция влажности поверхностного слоя по историческим данным."""
+    daily = weather_data["daily"]
     surface_moisture = 0
     snow_cover = 0
     days_since_rain = 1
-    
+
     for i in range(len(daily["time"])):
-        temp_mean = daily["temperature_2m_mean"][i] or 0
-        rain = daily["rain_sum"][i] or 0
-        snowfall_cm = daily["snowfall_sum"][i] or 0
-        eto = daily["et0_fao_evapotranspiration"][i] or 0
-        
-        snowfall_mm = snowfall_cm * 10
-        water_input = rain
-        
-        snow_cover += snowfall_mm
-        if temp_mean > 0 and snow_cover > 0:
-            melt_potential = temp_mean * 3.0
-            snow_water = snow_cover * 0.1
-            actual_melt = min(snow_water, melt_potential)
-            snow_cover -= actual_melt * 10
-            snow_cover = max(0, snow_cover)
-            water_input += actual_melt
-        
-        if water_input >= RAIN_THRESHOLD:
-            days_since_rain = 1
-        else:
-            days_since_rain += 1
-        
-        if snow_cover > 5:
-            evaporation = 0.05
-        elif surface_moisture > STAGE1_THRESHOLD:
-            evaporation = eto * 0.9
-        else:
-            str_factor = math.sqrt(days_since_rain) - math.sqrt(days_since_rain - 1)
-            evaporation = DESORPTIVITY * str_factor
-        
-        evaporation = min(evaporation, surface_moisture)
-        surface_moisture = surface_moisture + water_input - evaporation
-        surface_moisture = max(0, min(surface_moisture, CAPACITY))
-    
+        surface_moisture, snow_cover, days_since_rain = _simulate_day(
+            temp_mean=daily["temperature_2m_mean"][i] or 0,
+            rain=daily["rain_sum"][i] or 0,
+            snowfall_cm=daily["snowfall_sum"][i] or 0,
+            eto=daily["et0_fao_evapotranspiration"][i] or 0,
+            surface_moisture=surface_moisture,
+            snow_cover=snow_cover,
+            days_since_rain=days_since_rain,
+            soil_params=soil_params,
+        )
+
     return {
         "moisture": surface_moisture,
-        "capacity": CAPACITY,
+        "capacity": soil_params["capacity"],
         "days_dry": days_since_rain,
         "snow_cover": snow_cover,
     }
 
 
 def simulate_forecast(initial_state, forecast_data, soil_params):
-    """Симуляция с прогнозом погоды"""
+    """Симуляция с прогнозом погоды, возвращает результаты по дням."""
     daily = forecast_data["daily"]
-    
-    DESORPTIVITY = soil_params["desorptivity"]
-    CAPACITY = soil_params["capacity"]
-    STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
-    
     surface_moisture = initial_state["moisture"]
     snow_cover = initial_state.get("snow_cover", 0)
     days_since_rain = initial_state["days_dry"]
-    
     results = []
-    
+
     for i in range(len(daily["time"])):
-        date = daily["time"][i]
-        temp_max = daily["temperature_2m_max"][i] or 0
-        temp_min = daily["temperature_2m_min"][i] or 0
-        temp_mean = (temp_max + temp_min) / 2
-        rain = daily["rain_sum"][i] or 0
-        snowfall_cm = daily["snowfall_sum"][i] or 0
-        eto = daily["et0_fao_evapotranspiration"][i] or 0
-        
-        snowfall_mm = snowfall_cm * 10
-        water_input = rain
-        
-        snow_cover += snowfall_mm
-        if temp_mean > 0 and snow_cover > 0:
-            melt_potential = temp_mean * 3.0
-            snow_water = snow_cover * 0.1
-            actual_melt = min(snow_water, melt_potential)
-            snow_cover -= actual_melt * 10
-            snow_cover = max(0, snow_cover)
-            water_input += actual_melt
-        
-        if water_input >= RAIN_THRESHOLD:
-            days_since_rain = 1
-        else:
-            days_since_rain += 1
-        
-        if snow_cover > 5:
-            evaporation = 0.05
-        elif surface_moisture > STAGE1_THRESHOLD:
-            evaporation = eto * 0.9
-        else:
-            str_factor = math.sqrt(days_since_rain) - math.sqrt(days_since_rain - 1)
-            evaporation = DESORPTIVITY * str_factor
-        
-        evaporation = min(evaporation, surface_moisture)
-        surface_moisture = surface_moisture + water_input - evaporation
-        surface_moisture = max(0, min(surface_moisture, CAPACITY))
-        
+        temp_mean = ((daily["temperature_2m_max"][i] or 0) + (daily["temperature_2m_min"][i] or 0)) / 2
+        surface_moisture, snow_cover, days_since_rain = _simulate_day(
+            temp_mean=temp_mean,
+            rain=daily["rain_sum"][i] or 0,
+            snowfall_cm=daily["snowfall_sum"][i] or 0,
+            eto=daily["et0_fao_evapotranspiration"][i] or 0,
+            surface_moisture=surface_moisture,
+            snow_cover=snow_cover,
+            days_since_rain=days_since_rain,
+            soil_params=soil_params,
+        )
         results.append({
-            "date": date,
+            "date": daily["time"][i],
             "moisture": surface_moisture,
-            "capacity": CAPACITY,
-            "rain": rain,
+            "capacity": soil_params["capacity"],
+            "rain": daily["rain_sum"][i] or 0,
             "days_dry": days_since_rain,
             "snow_cover": snow_cover,
         })
-    
+
     return results
 
 
@@ -464,13 +434,13 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
                 m = f["forecast"][day_idx]["moisture"]
                 c = f["forecast"][day_idx]["capacity"]
                 total_moisture += m
-                
-                pct = m / c
-                if pct < 0.20:
+
+                _, status_key = get_status(m, c)
+                if status_key == "dry":
                     dry_count += 1
-                elif pct < 0.45:
+                elif status_key == "wet":
                     wet_count += 1
-                elif pct < 0.75:
+                elif status_key == "mud":
                     mud_count += 1
                 else:
                     swamp_count += 1
