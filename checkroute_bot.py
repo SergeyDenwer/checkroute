@@ -244,7 +244,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
         # Таблица на 7 дней
         table = ["Дата    Сухо Влаж Гряз Меси"]
         for ds in forecast_info["daily_stats"][:7]:
-            date_short = ds["date"][5:10].replace("-", ".")  # MM.DD
+            date_short = ds["date"][8:10] + "." + ds["date"][5:7]  # DD.MM
             table.append(
                 f"{date_short}  {ds['dry_pct']:>3.0f}% {ds['wet_pct']:>3.0f}% "
                 f"{ds['mud_pct']:>3.0f}% {ds['swamp_pct']:>3.0f}%"
