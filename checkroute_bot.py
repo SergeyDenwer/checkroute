@@ -13,8 +13,8 @@ import os
 import logging
 import tempfile
 from datetime import datetime, timedelta
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # Импортируем логику из v4
 from trail_moisture_v4 import (
@@ -394,6 +394,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday)
             if result:
                 result["name"] = route_name
+                result["gpx_file"] = gpx_file
                 route_results.append(result)
         except Exception as e:
             logger.error(f"Batch error for {gpx_file}: {e}")
@@ -441,7 +442,43 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]} <i>(сегодня)</i>"
 
     message = f"{header}\n\n{table_lines}\n\n{summary}"
-    await status_msg.edit_text(message, parse_mode='HTML')
+
+    # Inline-кнопки для перехода к детальному анализу маршрута
+    kbd_buttons = []
+    row_buf = []
+    for r in route_results:
+        e = verdict_emoji.get(r["today_level"], "❓")
+        label = f"{e} {r['name'][:18]}"
+        # callback_data ограничен 64 байтами; префикс "r:" + имя файла
+        row_buf.append(InlineKeyboardButton(label, callback_data=f"r:{r['gpx_file'][:61]}"))
+        if len(row_buf) == 2:
+            kbd_buttons.append(row_buf)
+            row_buf = []
+    if row_buf:
+        kbd_buttons.append(row_buf)
+
+    reply_markup = InlineKeyboardMarkup(kbd_buttons)
+    await status_msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+
+
+async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Нажатие на кнопку маршрута из /batch — запускает детальный анализ"""
+    query = update.callback_query
+    await query.answer()
+
+    gpx_file = query.data[2:]  # убираем префикс "r:"
+    gpx_path = os.path.join(ROUTES_DIR, gpx_file)
+
+    if not os.path.isfile(gpx_path):
+        await query.message.reply_text("❌ Файл маршрута не найден")
+        return
+
+    route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
+    status_msg = await query.message.reply_text(f"🔍 Анализирую {route_name}...")
+
+    soil_type = context.user_data.get('soil', DEFAULT_SOIL)
+    report = await analyze_gpx(gpx_path, soil_type, status_msg)
+    await status_msg.edit_text(report, parse_mode='HTML')
 
 
 def main():
@@ -463,6 +500,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("soil", soil_command))
     app.add_handler(CommandHandler("batch", batch_command))
+    app.add_handler(CallbackQueryHandler(route_detail_callback, pattern="^r:"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_gpx))
     
     # Запускаем
