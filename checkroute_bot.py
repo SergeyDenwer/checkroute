@@ -22,17 +22,13 @@ from trail_moisture_v4 import (
     sample_points_by_distance,
     get_soil_params,
     fetch_weather_data,
-    fetch_forecast,
     simulate_moisture,
-    simulate_forecast,
     get_status,
     get_trail_verdict,
     aggregate_status,
     forecast_trail_drying,
     haversine_distance,
-    STATUS_THRESHOLDS,
     SOIL_PARAMS_TABLE,
-    RAIN_THRESHOLD,
 )
 
 # Настройка логирования
