@@ -405,32 +405,43 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Сортируем: лучшие сверху
     route_results.sort(key=lambda r: r["today_dry"], reverse=True)
 
-    # Формируем отчёт
+    # Формируем отчёт в виде таблицы
     sat_label = f"Сб {saturday.strftime('%d.%m')}"
-
-    lines = []
-    lines.append(f"<b>📊 Сводка по {len(route_results)} маршрутам</b>")
-    lines.append(f"🌍 {soil_params['name']} | 📅 {today.strftime('%d.%m.%Y')}")
-    lines.append(f"<i>% сухо: Сейчас · Завтра · {sat_label}</i>")
-    lines.append("")
+    sat_short = saturday.strftime('%d.%m')
 
     verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
     counts = {4: 0, 3: 0, 2: 0, 1: 0}
 
+    MAX_NAME = 16
+    sep = "─" * 34
+    # Заголовок: 3 пробела вместо «emoji » чтобы колонки совпадали
+    hdr = f"   {'Маршрут':<{MAX_NAME}}  Сч   Зв   {sat_short}"
+
+    table_rows = [hdr, sep]
     for r in route_results:
         e = verdict_emoji.get(r["today_level"], "❓")
         counts[r["today_level"]] += 1
-        lines.append(
-            f"{e} {r['name']} — "
-            f"{r['today_dry']:.0f}% · {r['tomorrow_dry']:.0f}% · {r['saturday_dry']:.0f}%"
+        name = r['name']
+        if len(name) > MAX_NAME:
+            name = name[:MAX_NAME - 1] + "…"
+        row = (
+            f"{e} {name:<{MAX_NAME}}"
+            f"  {r['today_dry']:>3.0f}%"
+            f"  {r['tomorrow_dry']:>3.0f}%"
+            f"  {r['saturday_dry']:>3.0f}%"
         )
+        table_rows.append(row)
+    table_rows.append(sep)
 
-    lines.append("")
-    lines.append(
-        f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]}"
+    header = (
+        f"<b>📊 Сводка по {len(route_results)} маршрутам</b>\n"
+        f"🌍 {soil_params['name']} | 📅 {today.strftime('%d.%m.%Y')}"
     )
+    table_content = "\n".join(table_rows)
+    summary = f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]}"
 
-    await status_msg.edit_text("\n".join(lines), parse_mode='HTML')
+    message = f"{header}\n\n<pre>{table_content}</pre>\n\n{summary}"
+    await status_msg.edit_text(message, parse_mode='HTML')
 
 
 def main():
