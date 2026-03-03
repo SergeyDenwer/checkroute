@@ -123,27 +123,27 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Скачиваем файл
-    await message.reply_text("⏳ Загружаю файл...")
-    
+    status_msg = await message.reply_text("⏳ Загружаю файл...")
+
     try:
         file = await context.bot.get_file(document.file_id)
-        
+
         with tempfile.NamedTemporaryFile(suffix='.gpx', delete=False) as tmp:
             await file.download_to_drive(tmp.name)
             gpx_path = tmp.name
-        
+
         # Анализируем
-        await message.reply_text("🔍 Анализирую маршрут...")
-        
+        await status_msg.edit_text("🔍 Анализирую маршрут...")
+
         soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-        report = await analyze_gpx(gpx_path, soil_type, message)
-        
+        report = await analyze_gpx(gpx_path, soil_type, status_msg)
+
         # Удаляем временный файл
         os.unlink(gpx_path)
-        
+
         # Отправляем отчёт
-        await message.reply_text(report, parse_mode='Markdown')
-        
+        await status_msg.edit_text(report, parse_mode='Markdown')
+
     except Exception as e:
         logger.error(f"Error processing GPX: {e}")
         await message.reply_text(f"❌ Ошибка обработки файла: {e}")
@@ -174,7 +174,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     results = []
     errors = 0
     
-    await message.reply_text(
+    await message.edit_text(
         f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
         f"🔬 Анализирую {len(sampled)} контрольных точек..."
     )
