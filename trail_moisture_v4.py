@@ -537,7 +537,7 @@ def print_summary(results, total_distance, forecast_info, soil_params):
     agg = aggregate_status(results)
     
     # Красивые полоски
-    bar_width = 40
+    bar_width = 20
     for key in ["dry", "wet", "mud", "swamp"]:
         if key in agg:
             info = agg[key]
