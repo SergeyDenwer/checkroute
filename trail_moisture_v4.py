@@ -518,13 +518,13 @@ def get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct):
     bad = mud_pct + swamp_pct
     
     if good >= 70:
-        return "✅ МОЖНО", "Жми, братан!", 4
+        return "✅ МОЖНО", "Вперед!", 4
     elif good >= 50 or (ok >= 80 and good >= 30):
         return "🟢 СКОРЕЕ МОЖНО", "Но это не точно", 3
     elif ok >= 50:
         return "🟠 СКОРЕЕ НЕЛЬЗЯ", "Чистым домой не вернёшься", 2
     else:
-        return "🔴 НЕЛЬЗЯ", "Оно тебя сожрёт. Сиди дома", 1
+        return "🔴 НЕЛЬЗЯ", "Не лезь, блядь, дебил сука ебаный. Оно тебя сожрёт!", 1
 
 
 def print_summary(results, total_distance, forecast_info, soil_params):
