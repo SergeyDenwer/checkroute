@@ -22,17 +22,13 @@ from trail_moisture_v4 import (
     sample_points_by_distance,
     get_soil_params,
     fetch_weather_data,
-    fetch_forecast,
     simulate_moisture,
-    simulate_forecast,
     get_status,
     get_trail_verdict,
     aggregate_status,
     forecast_trail_drying,
     haversine_distance,
-    STATUS_THRESHOLDS,
     SOIL_PARAMS_TABLE,
-    RAIN_THRESHOLD,
 )
 
 # Настройка логирования
@@ -125,6 +121,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Скачиваем файл
     status_msg = await message.reply_text("⏳ Загружаю файл...")
 
+    gpx_path = None
     try:
         file = await context.bot.get_file(document.file_id)
 
@@ -138,15 +135,15 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         soil_type = context.user_data.get('soil', DEFAULT_SOIL)
         report = await analyze_gpx(gpx_path, soil_type, status_msg)
 
-        # Удаляем временный файл
-        os.unlink(gpx_path)
-
         # Отправляем отчёт
         await status_msg.edit_text(report, parse_mode='HTML')
 
     except Exception as e:
         logger.error(f"Error processing GPX: {e}")
-        await message.reply_text(f"❌ Ошибка обработки файла: {e}")
+        await message.reply_text("❌ Ошибка обработки файла")
+    finally:
+        if gpx_path and os.path.exists(gpx_path):
+            os.unlink(gpx_path)
 
 
 async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
@@ -252,7 +249,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
                 f"{date_short}  {ds['dry_pct']:>3.0f}% {ds['wet_pct']:>3.0f}% "
                 f"{ds['mud_pct']:>3.0f}% {ds['swamp_pct']:>3.0f}%"
             )
-        report.append("<pre>" + "\n".join(table) + "</pre>")
+        for line in table:
+            report.append(f"<code>{line}</code>")
 
         # Переходы с живыми датами
         report.append("")
@@ -273,12 +271,10 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
             days_until = (dt.date() - today).days
             if days_until == 0:
                 report.append(f"{v}: сегодня")
+            elif days_until == 1:
+                report.append(f"{v}: завтра ({date_str[5:]})")
             else:
-                unix_ts = int(dt.replace(hour=12).timestamp())
-                report.append(
-                    f"{v}: <tg-time unix=\"{unix_ts}\" format=\"D\">{date_str}</tg-time>"
-                    f" (<tg-time unix=\"{unix_ts}\" format=\"r\">через {days_until} дн</tg-time>)"
-                )
+                report.append(f"{v}: {date_str[5:]} (через {days_until} дн)")
 
     if errors > 0:
         report.append("")
