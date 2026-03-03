@@ -271,10 +271,12 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
             days_until = (dt.date() - today).days
             if days_until == 0:
                 report.append(f"{v}: сегодня")
-            elif days_until == 1:
-                report.append(f"{v}: завтра ({date_str[5:]})")
             else:
-                report.append(f"{v}: {date_str[5:]} (через {days_until} дн)")
+                unix_ts = int(dt.replace(hour=12).timestamp())
+                report.append(
+                    f"{v}: <tg-time unix=\"{unix_ts}\" format=\"D\">{date_str}</tg-time>"
+                    f" (<tg-time unix=\"{unix_ts}\" format=\"r\">через {days_until} дн</tg-time>)"
+                )
 
     if errors > 0:
         report.append("")
