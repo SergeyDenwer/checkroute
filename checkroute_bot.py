@@ -252,7 +252,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
                 f"{date_short}  {ds['dry_pct']:>3.0f}% {ds['wet_pct']:>3.0f}% "
                 f"{ds['mud_pct']:>3.0f}% {ds['swamp_pct']:>3.0f}%"
             )
-        report.append("<pre>" + "\n".join(table) + "</pre>")
+        for line in table:
+            report.append(f"<code>{line}</code>")
 
         # Переходы с живыми датами
         report.append("")
