@@ -273,8 +273,9 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
                 report.append(f"{v}: сегодня")
             else:
                 unix_ts = int(dt.replace(hour=12).timestamp())
+                date_fmt = dt.strftime("%d.%m")
                 report.append(
-                    f"{v}: <tg-time unix=\"{unix_ts}\" format=\"D\">{date_str}</tg-time>"
+                    f"{v}: <tg-time unix=\"{unix_ts}\" format=\"D\">{date_fmt}</tg-time>"
                     f" (<tg-time unix=\"{unix_ts}\" format=\"r\">через {days_until} дн</tg-time>)"
                 )
 
