@@ -50,42 +50,42 @@ DEFAULT_SOIL = "loam"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     await update.message.reply_text(
-        "🛤 *CheckRoute*\n\n"
+        "🛤 <b>CheckRoute</b>\n\n"
         "Проверю твой маршрут — скажу, можно ли катать "
         "и когда высохнет.\n\n"
-        "*Как использовать:*\n"
+        "<b>Как использовать:</b>\n"
         "Просто отправь GPX файл\n\n"
-        "*Команды:*\n"
+        "<b>Команды:</b>\n"
         "/soil — выбрать тип почвы\n"
         "/help — справка\n\n"
-        f"Тип почвы: *{SOIL_PARAMS_TABLE[DEFAULT_SOIL]['name']}*",
-        parse_mode='Markdown'
+        f"Тип почвы: <b>{SOIL_PARAMS_TABLE[DEFAULT_SOIL]['name']}</b>",
+        parse_mode='HTML'
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
-    soil_list = "\n".join([f"  `{k}` — {v['name']}" for k, v in SOIL_PARAMS_TABLE.items()])
-    
+    soil_list = "\n".join([f"  <code>{k}</code> — {v['name']}" for k, v in SOIL_PARAMS_TABLE.items()])
+
     await update.message.reply_text(
-        "🛤 *CheckRoute — Справка*\n\n"
-        "*Как использовать:*\n"
+        "🛤 <b>CheckRoute — Справка</b>\n\n"
+        "<b>Как использовать:</b>\n"
         "Отправь GPX файл → получи отчёт\n\n"
-        "*Типы почвы:*\n"
+        "<b>Типы почвы:</b>\n"
         f"{soil_list}\n\n"
-        "*Выбрать почву:*\n"
-        "`/soil chernozem`\n\n"
-        "*Статусы:*\n"
+        "<b>Выбрать почву:</b>\n"
+        "<code>/soil chernozem</code>\n\n"
+        "<b>Статусы:</b>\n"
         "☀️ СУХО — отлично\n"
         "🟠 ВЛАЖНО — скользко\n"
         "🔴 ГРЯЗЬ — грязно\n"
         "💀 МЕСИВО — жопа\n\n"
-        "*Вердикты:*\n"
+        "<b>Вердикты:</b>\n"
         "✅ МОЖНО\n"
         "🟢 СКОРЕЕ МОЖНО\n"
         "🟠 СКОРЕЕ НЕЛЬЗЯ\n"
         "🔴 НЕЛЬЗЯ",
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 
@@ -96,19 +96,19 @@ async def soil_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['soil'] = soil_type
         params = SOIL_PARAMS_TABLE[soil_type]
         await update.message.reply_text(
-            f"✅ Тип почвы изменён на: *{params['name']}*\n"
+            f"✅ Тип почвы изменён на: <b>{params['name']}</b>\n"
             f"Desorptivity: {params['desorptivity']} мм/√день\n"
             f"Ёмкость: {params['capacity']} мм",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     else:
-        soil_list = ", ".join([f"`{k}`" for k in SOIL_PARAMS_TABLE.keys()])
+        soil_list = ", ".join([f"<code>{k}</code>" for k in SOIL_PARAMS_TABLE.keys()])
         current = context.user_data.get('soil', DEFAULT_SOIL)
         await update.message.reply_text(
-            f"Текущий тип почвы: *{SOIL_PARAMS_TABLE[current]['name']}*\n\n"
+            f"Текущий тип почвы: <b>{SOIL_PARAMS_TABLE[current]['name']}</b>\n\n"
             f"Доступные типы:\n{soil_list}\n\n"
-            f"Пример: `/soil chernozem`",
-            parse_mode='Markdown'
+            f"Пример: <code>/soil chernozem</code>",
+            parse_mode='HTML'
         )
 
 
@@ -142,7 +142,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.unlink(gpx_path)
 
         # Отправляем отчёт
-        await status_msg.edit_text(report, parse_mode='Markdown')
+        await status_msg.edit_text(report, parse_mode='HTML')
 
     except Exception as e:
         logger.error(f"Error processing GPX: {e}")
@@ -216,72 +216,74 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     
     # Формируем отчёт
     report = []
-    report.append(f"*🛤 CheckRoute*")
+    report.append("<b>🛤 CheckRoute</b>")
     report.append(f"📏 {total_distance:.1f} км | 🌍 {soil_params['name']}")
     report.append("")
-    
+
     # Распределение
-    report.append("*📊 СОСТОЯНИЕ:*")
-    
+    report.append("<b>📊 СОСТОЯНИЕ:</b>")
+
     def make_bar(pct, width=20):
         filled = int(pct / 100 * width)
         return "█" * filled + "░" * (width - filled)
-    
+
     for key in ["dry", "wet", "mud", "swamp"]:
         if key in agg:
             info = agg[key]
             bar = make_bar(info["percent"])
-            report.append(f"{info['label']} `{bar}` {info['percent']:.0f}%")
-    
+            report.append(f"{info['label']} <code>{bar}</code> {info['percent']:.0f}%")
+
     report.append("")
-    report.append(f"*🎯 {verdict}*")
-    report.append(f"_{comment}_")
-    
+    report.append(f"<b>🎯 {verdict}</b>")
+    report.append(f"<i>{comment}</i>")
+
     # Прогноз
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=False)
-    
+
     if forecast_info and forecast_info.get("daily_stats"):
         report.append("")
-        report.append("*🔮 ПРОГНОЗ:*")
-        
+        report.append("<b>🔮 ПРОГНОЗ:</b>")
+
         # Таблица на 7 дней
-        report.append("```")
-        report.append("Дата    Сухо Влаж Гряз Меси")
+        table = ["Дата    Сухо Влаж Гряз Меси"]
         for ds in forecast_info["daily_stats"][:7]:
             date_short = ds["date"][5:10]  # MM-DD
-            report.append(
+            table.append(
                 f"{date_short}  {ds['dry_pct']:>3.0f}% {ds['wet_pct']:>3.0f}% "
                 f"{ds['mud_pct']:>3.0f}% {ds['swamp_pct']:>3.0f}%"
             )
-        report.append("```")
-        
-        # Переходы
+        report.append("<pre>" + "\n".join(table) + "</pre>")
+
+        # Переходы с живыми датами
         report.append("")
-        prev_verdict = None
         seen_levels = set()
         transitions = []
-        
+
         for ds in forecast_info["daily_stats"]:
             v, _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if level not in seen_levels:
                 transitions.append((ds["date"], v, level))
                 seen_levels.add(level)
-        
+
         transitions.sort(key=lambda x: x[2])
-        
+
         today = datetime.now().date()
         for date_str, v, level in transitions:
-            dt = datetime.strptime(date_str, "%Y-%m-%d").date()
-            days_until = (dt - today).days
-            if days_until > 0:
-                report.append(f"{v}: {date_str} (через {days_until} дн)")
-            elif days_until == 0:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            days_until = (dt.date() - today).days
+            if days_until == 0:
                 report.append(f"{v}: сегодня")
-    
+            else:
+                unix_ts = int(dt.replace(hour=12).timestamp())
+                report.append(
+                    f"{v}: <tg-time unix=\"{unix_ts}\" format=\"D\">{date_str}</tg-time>"
+                    f" (<tg-time unix=\"{unix_ts}\" format=\"r\">через {days_until} дн</tg-time>)"
+                )
+
     if errors > 0:
         report.append("")
-        report.append(f"⚠️ _{errors} точек пропущено из-за ошибок API_")
-    
+        report.append(f"⚠️ <i>{errors} точек пропущено из-за ошибок API</i>")
+
     return "\n".join(report)
 
 
