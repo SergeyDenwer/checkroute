@@ -223,7 +223,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     # Распределение
     report.append("<b>📊 СОСТОЯНИЕ:</b>")
 
-    def make_bar(pct, width=20):
+    def make_bar(pct, width=10):
         filled = int(pct / 100 * width)
         return "█" * filled + "░" * (width - filled)
 
