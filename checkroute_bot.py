@@ -121,6 +121,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Скачиваем файл
     status_msg = await message.reply_text("⏳ Загружаю файл...")
 
+    gpx_path = None
     try:
         file = await context.bot.get_file(document.file_id)
 
@@ -134,15 +135,15 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         soil_type = context.user_data.get('soil', DEFAULT_SOIL)
         report = await analyze_gpx(gpx_path, soil_type, status_msg)
 
-        # Удаляем временный файл
-        os.unlink(gpx_path)
-
         # Отправляем отчёт
         await status_msg.edit_text(report, parse_mode='HTML')
 
     except Exception as e:
         logger.error(f"Error processing GPX: {e}")
-        await message.reply_text(f"❌ Ошибка обработки файла: {e}")
+        await message.reply_text("❌ Ошибка обработки файла")
+    finally:
+        if gpx_path and os.path.exists(gpx_path):
+            os.unlink(gpx_path)
 
 
 async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
