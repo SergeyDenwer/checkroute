@@ -437,10 +437,10 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>📊 Сводка по {len(route_results)} маршрутам</b>\n"
         f"🌍 {soil_params['name']} | 📅 {today.strftime('%d.%m.%Y')}"
     )
-    table_content = "\n".join(table_rows)
-    summary = f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]}"
+    table_lines = "\n".join(f"<code>{row}</code>" for row in table_rows)
+    summary = f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]} <i>(сегодня)</i>"
 
-    message = f"{header}\n\n<pre>{table_content}</pre>\n\n{summary}"
+    message = f"{header}\n\n{table_lines}\n\n{summary}"
     await status_msg.edit_text(message, parse_mode='HTML')
 
 
