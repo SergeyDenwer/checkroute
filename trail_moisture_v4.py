@@ -622,20 +622,51 @@ def print_summary(results, total_distance, forecast_info, soil_params):
     print(f"{'='*60}\n")
 
 
+ROUTES_DIR = "routes"
+
+
+def resolve_gpx(gpx_arg=None, route_arg=None):
+    """Возвращает путь к GPX файлу по --gpx или --route."""
+    if gpx_arg:
+        return gpx_arg
+    import os, glob as _glob
+    pattern = os.path.join(ROUTES_DIR, f"*{route_arg}*.gpx")
+    matches = _glob.glob(pattern)
+    if not matches:
+        raise SystemExit(f"Маршрут '{route_arg}' не найден в папке {ROUTES_DIR}/")
+    if len(matches) > 1:
+        names = ", ".join(os.path.basename(m) for m in matches)
+        raise SystemExit(f"Найдено несколько маршрутов: {names}. Уточни название.")
+    return matches[0]
+
+
+def parse_date(date_str):
+    """Принимает DD.MM.YYYY или YYYY-MM-DD, возвращает YYYY-MM-DD."""
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    raise SystemExit(f"Неверный формат даты: '{date_str}'. Используй DD.MM.YYYY или YYYY-MM-DD.")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Trail Moisture v4 — GPX анализ')
-    parser.add_argument('--gpx', type=str, required=True, help='Путь к GPX файлу')
+    gpx_group = parser.add_mutually_exclusive_group(required=True)
+    gpx_group.add_argument('--gpx', type=str, help='Путь к GPX файлу')
+    gpx_group.add_argument('--route', type=str, help='Название маршрута из папки routes/')
     parser.add_argument('--soil', type=str, default=None,
                         help='Тип почвы: sand, sandy_loam, loam, silt_loam, clay_loam, clay, chernozem')
     parser.add_argument('--sample-km', type=float, default=5.0,
                         help='Интервал сэмплирования в км (по умолчанию 5)')
     parser.add_argument('--no-forecast', action='store_true', help='Не делать прогноз')
     parser.add_argument('--date', type=str, default=None,
-                        help='Целевая дата в формате YYYY-MM-DD (по умолчанию сегодня). '
-                             'При указании прошедшей даты прогноз отключается.')
+                        help='Целевая дата: DD.MM.YYYY или YYYY-MM-DD (по умолчанию сегодня). '
+                             'При исторической дате прогноз отключается.')
     args = parser.parse_args()
 
-    target_date = args.date
+    gpx_file = resolve_gpx(args.gpx, args.route)
+    target_date = parse_date(args.date) if args.date else None
     display_date = target_date or datetime.now().strftime("%Y-%m-%d")
 
     print(f"\n{'='*60}")
@@ -649,7 +680,7 @@ def main():
 
     # Анализ трейла
     results, total_distance = analyze_trail(
-        args.gpx,
+        gpx_file,
         soil_params,
         sample_km=args.sample_km,
         verbose=True,
