@@ -149,7 +149,7 @@ class RouteCardRenderer:
         h = 110          # header
         h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
-            h += 24 + 10 + len(data.forecast_rows) * 56 + 20
+            h += 38 + 6 + len(data.forecast_rows) * 56 + 20
         h += 40          # bottom padding
         return h
 
@@ -259,8 +259,8 @@ class RouteCardRenderer:
     def _draw_forecast_section(self, ctx, data: RouteCardData, y0: int) -> int:
         pad     = self.H_PAD
         row_h   = 56
-        title_y = y0 + 24
-        card_y  = title_y + 10
+        title_y = y0 + 38
+        card_y  = title_y + 6
         card_w  = self.WIDTH - pad * 2
         card_h  = len(data.forecast_rows) * row_h + 20
 
