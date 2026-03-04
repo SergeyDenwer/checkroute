@@ -86,8 +86,8 @@ def compute_condition_index(
 class RouteCardRenderer:
     """Renders a single-route condition card as PNG bytes via pycairo."""
 
-    WIDTH  = 800
-    H_PAD  = 30
+    WIDTH  = 540
+    H_PAD  = 20
 
     # ── Palette ───────────────────────────────────────────────────────────────
     BG      : Color = (0.04,  0.04,  0.04)
@@ -154,11 +154,11 @@ class RouteCardRenderer:
 
         cx = self.WIDTH / 2
         self._text(ctx, data.route_name,
-                   cx, y0 + 52, size=36, bold=True, align='center')
+                   cx, y0 + 52, size=30, bold=True, align='center')
 
         subtitle = f"{data.length_km:.1f} km  ·  {data.soil_name}"
         self._text(ctx, subtitle,
-                   cx, y0 + 85, size=21, align='center', color=self.GRAY)
+                   cx, y0 + 82, size=18, align='center', color=self.GRAY)
 
         return y0 + h
 
@@ -175,8 +175,8 @@ class RouteCardRenderer:
         ctx.fill()
 
         cx    = self.WIDTH / 2
-        bar_x = card_x + 50
-        bar_w = card_w - 100
+        bar_x = card_x + 36
+        bar_w = card_w - 72
         bar_y = card_y + 60
         bar_h = 34
 
@@ -185,22 +185,22 @@ class RouteCardRenderer:
 
         # End labels
         self._text(ctx, "СУХО",
-                   bar_x, bar_y + bar_h + 28,
-                   size=17, color=self.GRAY)
+                   bar_x, bar_y + bar_h + 26,
+                   size=15, color=self.GRAY)
         self._text(ctx, "МЕСИВО",
-                   bar_x + bar_w, bar_y + bar_h + 28,
-                   size=17, align='right', color=self.GRAY)
+                   bar_x + bar_w, bar_y + bar_h + 26,
+                   size=15, align='right', color=self.GRAY)
 
         # Percentage
         self._text(ctx, f"{data.condition_index}%",
-                   cx, bar_y + bar_h + 102,
-                   size=52, bold=True, align='center')
+                   cx, bar_y + bar_h + 96,
+                   size=44, bold=True, align='center')
 
         # Verdict
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, bar_y + bar_h + 148,
-                   size=26, bold=True, align='center', color=vc)
+                   cx, bar_y + bar_h + 138,
+                   size=22, bold=True, align='center', color=vc)
 
         return y0 + 24 + card_h
 
@@ -227,11 +227,11 @@ class RouteCardRenderer:
         self._rounded_rect(ctx, pad, card_y, card_w, card_h, r=14)
         ctx.fill()
 
-        bar_x   = pad + 240
-        bar_w   = card_w - 240 - 72
+        bar_x   = pad + 170
+        bar_w   = card_w - 170 - 52
         bar_h   = 10
         bar_r   = bar_h / 2
-        pct_x   = pad + card_w - 18
+        pct_x   = pad + card_w - 12
 
         for i, (field, label, color) in enumerate(self._STATUS_ROWS):
             pct   = getattr(data, field)
@@ -240,17 +240,17 @@ class RouteCardRenderer:
 
             if i > 0:
                 ctx.set_source_rgb(*self.DIVIDER)
-                ctx.rectangle(pad + 18, ry, card_w - 36, 1)
+                ctx.rectangle(pad + 14, ry, card_w - 28, 1)
                 ctx.fill()
 
             # Colored dot
             ctx.set_source_rgb(*color)
-            ctx.arc(pad + 28, mid_y, 8, 0, 2 * math.pi)
+            ctx.arc(pad + 22, mid_y, 7, 0, 2 * math.pi)
             ctx.fill()
 
             # Label
-            text_y = mid_y + 8
-            self._text(ctx, label, pad + 50, text_y, size=21, bold=True)
+            text_y = mid_y + 7
+            self._text(ctx, label, pad + 38, text_y, size=18, bold=True)
 
             # Bar background
             by = mid_y - bar_h / 2
@@ -266,7 +266,7 @@ class RouteCardRenderer:
 
             # Percentage
             self._text(ctx, f"{pct:.0f}%", pct_x, text_y,
-                       size=20, align='right', color=self.GRAY)
+                       size=17, align='right', color=self.GRAY)
 
         return y0 + 28 + 16 + card_h
 
@@ -293,26 +293,26 @@ class RouteCardRenderer:
             # Divider between rows
             if i > 0:
                 ctx.set_source_rgb(*self.DIVIDER)
-                ctx.rectangle(pad + 18, ry, card_w - 36, 1)
+                ctx.rectangle(pad + 14, ry, card_w - 28, 1)
                 ctx.fill()
 
             # Colored circle indicator
-            dot_cx = pad + 30
+            dot_cx = pad + 22
             dot_cy = ry + row_h / 2
             ctx.set_source_rgb(*self.VERDICT_COLOR[row.level])
-            ctx.arc(dot_cx, dot_cy, 9, 0, 2 * math.pi)
+            ctx.arc(dot_cx, dot_cy, 7, 0, 2 * math.pi)
             ctx.fill()
 
             # Verdict label
-            text_y = dot_cy + 8
+            text_y = dot_cy + 7
             self._text(ctx, row.label,
-                       dot_cx + 24, text_y,
-                       size=22, bold=True)
+                       dot_cx + 18, text_y,
+                       size=19, bold=True)
 
             # Date (right-aligned)
             self._text(ctx, row.date_str,
-                       pad + card_w - 18, text_y,
-                       size=21, align='right', color=self.GRAY)
+                       pad + card_w - 12, text_y,
+                       size=17, align='right', color=self.GRAY)
 
         return y0 + 30 + 16 + card_h
 
