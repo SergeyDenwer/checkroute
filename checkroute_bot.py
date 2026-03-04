@@ -16,6 +16,11 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
+from route_card import (
+    RouteCardRenderer, RouteCardData, ForecastRow,
+    compute_condition_index, SOIL_DISPLAY,
+)
+
 # Импортируем логику из v4
 from trail_moisture_v4 import (
     parse_gpx,
@@ -42,6 +47,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_SAMPLE_KM = 5.0
 DEFAULT_SOIL = "loam"
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
+
+VERDICT_LABELS = {
+    1: "НЕЛЬЗЯ",
+    2: "СКОРЕЕ НЕЛЬЗЯ",
+    3: "СКОРЕЕ МОЖНО",
+    4: "МОЖНО",
+}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,10 +150,17 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         soil_type = context.user_data.get('soil', DEFAULT_SOIL)
         route_name = os.path.splitext(document.file_name)[0].replace('_', ' ')
-        report = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
+        card_data, error = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
 
-        # Отправляем отчёт
-        await status_msg.edit_text(report, parse_mode='HTML')
+        if error:
+            await status_msg.edit_text(error, parse_mode='HTML')
+        else:
+            png = RouteCardRenderer().render(card_data)
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await message.reply_photo(photo=png)
 
     except Exception as e:
         logger.error(f"Error processing GPX: {e}")
@@ -151,46 +170,37 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(gpx_path)
 
 
-async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = "") -> str:
-    """Анализ GPX и формирование отчёта"""
-    
-    # Парсим GPX
+async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = ""):
+    """
+    Анализ GPX.
+    Возвращает (RouteCardData, None) при успехе или (None, error_text) при ошибке.
+    """
     points = parse_gpx(gpx_path)
     if not points:
-        return "❌ GPX файл пустой или повреждён"
-    
-    # Считаем длину
-    total_distance = 0
-    for i in range(1, len(points)):
-        total_distance += haversine_distance(
-            points[i-1][0], points[i-1][1],
-            points[i][0], points[i][1]
-        )
-    
-    # Сэмплируем точки
+        return None, "❌ GPX файл пустой или повреждён"
+
+    total_distance = sum(
+        haversine_distance(points[i-1][0], points[i-1][1], points[i][0], points[i][1])
+        for i in range(1, len(points))
+    )
+
     sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
-    
     soil_params = get_soil_params(soil_type)
-    
-    # Анализ каждой точки
-    results = []
-    errors = 0
-    
+
     await message.edit_text(
         f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
         f"🔬 Анализирую {len(sampled)} контрольных точек..."
     )
-    
+
+    results = []
+    errors = 0
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
             weather = fetch_weather_data(lat, lon, days_back=14)
             state = simulate_moisture(weather, soil_params)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
-            
             results.append({
-                "lat": lat,
-                "lon": lon,
-                "elevation": elev,
+                "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
@@ -202,94 +212,59 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         except Exception as e:
             errors += 1
             logger.warning(f"Point {idx} error: {e}")
-    
+
     if not results:
-        return "❌ Не удалось получить данные погоды ни для одной точки"
-    
-    # Агрегируем статусы
+        return None, "❌ Не удалось получить данные погоды ни для одной точки"
+
     agg = aggregate_status(results)
-    
-    dry_pct = agg.get("dry", {}).get("percent", 0)
-    wet_pct = agg.get("wet", {}).get("percent", 0)
-    mud_pct = agg.get("mud", {}).get("percent", 0)
+    dry_pct   = agg.get("dry",   {}).get("percent", 0)
+    wet_pct   = agg.get("wet",   {}).get("percent", 0)
+    mud_pct   = agg.get("mud",   {}).get("percent", 0)
     swamp_pct = agg.get("swamp", {}).get("percent", 0)
-    
-    verdict, _ = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
-    
-    # Формируем отчёт
-    report = []
-    report.append("<b>🛤 CheckRoute</b>")
-    report.append(f"📏 {total_distance:.1f} км | 🌍 {soil_params['name']}")
-    if route_name:
-        report.append(f"🗺 <b>{route_name}</b>")
-    report.append("")
 
-    # Распределение
-    report.append("<b>📊 СОСТОЯНИЕ:</b>")
+    _, verdict_level = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
 
-    def make_bar(pct, width=10):
-        filled = int(pct / 100 * width)
-        return "█" * filled + "░" * (width - filled)
-
-    for key in ["dry", "wet", "mud", "swamp"]:
-        if key in agg:
-            info = agg[key]
-            bar = make_bar(info["percent"])
-            report.append(f"{info['label']} <code>{bar}</code> {info['percent']:.0f}%")
-
-    report.append("")
-    report.append(f"<b>🎯 {verdict}</b>")
-
-    # Прогноз
+    # Строим строки прогноза
+    forecast_rows = []
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=False)
 
     if forecast_info and forecast_info.get("daily_stats"):
-        report.append("")
-        report.append("<b>🔮 ПРОГНОЗ:</b>")
-
-        # Таблица на 7 дней
-        table = ["Дата    Сухо Влаж Гряз Меси"]
-        for ds in forecast_info["daily_stats"][:7]:
-            date_short = ds["date"][8:10] + "." + ds["date"][5:7]  # DD.MM
-            table.append(
-                f"{date_short}  {ds['dry_pct']:>3.0f}% {ds['wet_pct']:>3.0f}% "
-                f"{ds['mud_pct']:>3.0f}% {ds['swamp_pct']:>3.0f}%"
-            )
-        for line in table:
-            report.append(f"<code>{line}</code>")
-
-        # Переходы с живыми датами
-        report.append("")
+        today = datetime.now().date()
         seen_levels = set()
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
-            v, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if level not in seen_levels:
-                transitions.append((ds["date"], v, level))
+                transitions.append((ds["date"], level))
                 seen_levels.add(level)
 
-        transitions.sort(key=lambda x: x[2])
+        transitions.sort(key=lambda x: x[1])  # worst first (level 1 → 4)
 
-        today = datetime.now().date()
-        for date_str, v, level in transitions:
+        for date_str, level in transitions:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             days_until = (dt.date() - today).days
             if days_until == 0:
-                report.append(f"{v}: сегодня")
+                date_label = "сегодня"
             else:
-                unix_ts = int(dt.replace(hour=12).timestamp())
-                date_fmt = date_str[8:10] + "." + date_str[5:7]
-                report.append(
-                    f"{v}: {date_fmt}"
-                    f" (<tg-time unix=\"{unix_ts}\" format=\"r\">через {days_until} дн</tg-time>)"
-                )
+                date_label = f"{date_str[8:10]}.{date_str[5:7]} (через {days_until} дн.)"
+            forecast_rows.append(ForecastRow(
+                level=level,
+                label=VERDICT_LABELS[level],
+                date_str=date_label,
+            ))
 
-    if errors > 0:
-        report.append("")
-        report.append(f"⚠️ <i>{errors} точек пропущено из-за ошибок API</i>")
+    card_data = RouteCardData(
+        route_name=route_name or "Маршрут",
+        length_km=round(total_distance, 1),
+        soil_name=SOIL_DISPLAY.get(soil_type, soil_params["name"]),
+        condition_index=compute_condition_index(dry_pct, wet_pct, mud_pct, swamp_pct),
+        verdict_text=VERDICT_LABELS[verdict_level],
+        verdict_level=verdict_level,
+        forecast_rows=forecast_rows,
+    )
 
-    return "\n".join(report)
+    return card_data, None
 
 
 def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
@@ -479,8 +454,17 @@ async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     status_msg = await query.message.reply_text(f"🔍 Анализирую {route_name}...")
 
     soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-    report = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
-    await status_msg.edit_text(report, parse_mode='HTML')
+    card_data, error = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
+
+    if error:
+        await status_msg.edit_text(error, parse_mode='HTML')
+    else:
+        png = RouteCardRenderer().render(card_data)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await query.message.reply_photo(photo=png)
 
 
 def main():
