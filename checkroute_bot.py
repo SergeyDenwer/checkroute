@@ -213,7 +213,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     mud_pct = agg.get("mud", {}).get("percent", 0)
     swamp_pct = agg.get("swamp", {}).get("percent", 0)
     
-    verdict, comment, _ = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
+    verdict, _ = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
     
     # Формируем отчёт
     report = []
@@ -236,7 +236,6 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
 
     report.append("")
     report.append(f"<b>🎯 {verdict}</b>")
-    report.append(f"<i>{comment}</i>")
 
     # Прогноз
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=False)
@@ -262,7 +261,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
-            v, _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            v, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if level not in seen_levels:
                 transitions.append((ds["date"], v, level))
                 seen_levels.add(level)
@@ -327,7 +326,7 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     today_wet = agg.get("wet", {}).get("percent", 0)
     today_mud = agg.get("mud", {}).get("percent", 0)
     today_swamp = agg.get("swamp", {}).get("percent", 0)
-    _, _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
+    _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
 
     # Прогноз — берём меньше точек чтобы не долбить API
     tomorrow_dry = today_dry
