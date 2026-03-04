@@ -214,7 +214,7 @@ class RouteCardRenderer:
 
         # "Состояние:" — small label just above first row dots, same left indent
         self._text(ctx, "Состояние:", card_x + 14, rows_start - 4,
-                   size=13, color=self.GRAY)
+                   size=20, color=self.GRAY)
 
         # ── Status bars (no dividers) ─────────────────────────────────────────
         for i, (field_name, label, color) in enumerate(self._STATUS_ROWS):
