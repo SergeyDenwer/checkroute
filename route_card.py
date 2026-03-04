@@ -60,6 +60,10 @@ class RouteCardData:
     condition_index: int            # 0 (perfectly dry) → 100 (fully swamped)
     verdict_text:    str            # "НЕЛЬЗЯ" / "СКОРЕЕ НЕЛЬЗЯ" / "СКОРЕЕ МОЖНО" / "МОЖНО"
     verdict_level:   int            # 1 – 4
+    dry_pct:         float = 0.0   # status distribution, %
+    wet_pct:         float = 0.0
+    mud_pct:         float = 0.0
+    swamp_pct:       float = 0.0
     forecast_rows:   List[ForecastRow] = field(default_factory=list)
 
 
@@ -114,6 +118,7 @@ class RouteCardRenderer:
         y = 0
         y = self._draw_header(ctx, data, y)
         y = self._draw_speedometer_section(ctx, data, y)
+        y = self._draw_breakdown_section(ctx, data, y)
         if data.forecast_rows:
             self._draw_forecast_section(ctx, data, y)
 
@@ -126,6 +131,7 @@ class RouteCardRenderer:
     def _total_height(self, data: RouteCardData) -> int:
         h = 110                                             # header
         h += 284                                            # scale card
+        h += 28 + 16 + 4 * 48 + 20                         # breakdown (256)
         if data.forecast_rows:
             h += 30 + 16 + len(data.forecast_rows) * 56 + 20   # forecast
         h += 40                                             # bottom padding
@@ -197,6 +203,72 @@ class RouteCardRenderer:
                    size=26, bold=True, align='center', color=vc)
 
         return y0 + 24 + card_h
+
+    # ── Section: status breakdown ────────────────────────────────────────────
+
+    _STATUS_ROWS = [
+        ("dry_pct",   "СУХО",   (0.18, 0.80, 0.44)),   # green
+        ("wet_pct",   "ВЛАЖНО", (1.00, 0.60, 0.00)),   # orange
+        ("mud_pct",   "ГРЯЗЬ",  (0.93, 0.20, 0.20)),   # red
+        ("swamp_pct", "МЕСИВО", (0.45, 0.04, 0.04)),   # dark maroon
+    ]
+
+    def _draw_breakdown_section(self, ctx, data: RouteCardData, y0: int) -> int:
+        pad     = self.H_PAD
+        row_h   = 48
+        title_y = y0 + 28
+        card_y  = title_y + 16
+        card_w  = self.WIDTH - pad * 2
+        card_h  = 4 * row_h + 20
+
+        self._text(ctx, "СОСТОЯНИЕ:", pad, title_y, size=20, color=self.GRAY)
+
+        ctx.set_source_rgb(*self.CARD)
+        self._rounded_rect(ctx, pad, card_y, card_w, card_h, r=14)
+        ctx.fill()
+
+        bar_x   = pad + 240
+        bar_w   = card_w - 240 - 72
+        bar_h   = 10
+        bar_r   = bar_h / 2
+        pct_x   = pad + card_w - 18
+
+        for i, (field, label, color) in enumerate(self._STATUS_ROWS):
+            pct   = getattr(data, field)
+            ry    = card_y + 10 + i * row_h
+            mid_y = ry + row_h / 2
+
+            if i > 0:
+                ctx.set_source_rgb(*self.DIVIDER)
+                ctx.rectangle(pad + 18, ry, card_w - 36, 1)
+                ctx.fill()
+
+            # Colored dot
+            ctx.set_source_rgb(*color)
+            ctx.arc(pad + 28, mid_y, 8, 0, 2 * math.pi)
+            ctx.fill()
+
+            # Label
+            text_y = mid_y + 8
+            self._text(ctx, label, pad + 50, text_y, size=21, bold=True)
+
+            # Bar background
+            by = mid_y - bar_h / 2
+            ctx.set_source_rgb(0.12, 0.12, 0.12)
+            self._rounded_rect(ctx, bar_x, by, bar_w, bar_h, bar_r)
+            ctx.fill()
+
+            # Bar fill (minimum 1 pill width so 0% is still visible as a dot)
+            fill_w = max(bar_h, bar_w * pct / 100)
+            ctx.set_source_rgb(*color)
+            self._rounded_rect(ctx, bar_x, by, fill_w, bar_h, bar_r)
+            ctx.fill()
+
+            # Percentage
+            self._text(ctx, f"{pct:.0f}%", pct_x, text_y,
+                       size=20, align='right', color=self.GRAY)
+
+        return y0 + 28 + 16 + card_h
 
     # ── Section: forecast ─────────────────────────────────────────────────────
 
