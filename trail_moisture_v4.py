@@ -115,10 +115,14 @@ def get_soil_params(soil_type=None):
     return SOIL_PARAMS_TABLE["loam"].copy()
 
 
-def fetch_weather_data(lat, lon, days_back=14):
-    """Получаем данные погоды из Open-Meteo"""
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+def fetch_weather_data(lat, lon, days_back=14, target_date=None):
+    """Получаем данные погоды из Open-Meteo.
+
+    target_date — дата, за которую смотрим состояние (по умолчанию сегодня).
+    """
+    base = datetime.strptime(target_date, "%Y-%m-%d") if target_date else datetime.now()
+    end_date = base.strftime("%Y-%m-%d")
+    start_date = (base - timedelta(days=days_back)).strftime("%Y-%m-%d")
     
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
@@ -270,7 +274,7 @@ def get_status(moisture, capacity):
     return STATUS_THRESHOLDS[-1][1], STATUS_THRESHOLDS[-1][2]
 
 
-def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
+def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True, target_date=None):
     """
     Анализ всего трейла:
     1. Парсим GPX
@@ -308,10 +312,10 @@ def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
             print(f"   [{idx+1}/{len(sampled)}] км {dist_km:.1f}: ({lat:.4f}, {lon:.4f})...", end=" ", flush=True)
         
         try:
-            weather = fetch_weather_data(lat, lon, days_back=14)
+            weather = fetch_weather_data(lat, lon, days_back=14, target_date=target_date)
             state = simulate_moisture(weather, soil_params)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
-            
+
             results.append({
                 "lat": lat,
                 "lon": lon,
@@ -323,6 +327,7 @@ def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
                 "snow_cover": state["snow_cover"],
                 "status_label": status_label,
                 "status_key": status_key,
+                "weather": weather,
             })
             
             if verbose:
@@ -496,6 +501,48 @@ def get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct):
         return "🔴 НЕЛЬЗЯ", 1
 
 
+def print_precipitation_log(results):
+    """Печатаем таблицу осадков по дням (по первой точке с погодными данными)."""
+    weather_result = next((r for r in results if "weather" in r), None)
+    if not weather_result:
+        return
+
+    daily = weather_result["weather"]["daily"]
+    dates = daily["time"]
+    rain = daily["rain_sum"]
+    snow = daily["snowfall_sum"]
+
+    print(f"\n{'─'*60}")
+    print(f"🌧  ОСАДКИ ЗА ПЕРИОД (точка km {weather_result['distance_km']:.0f})")
+    print(f"{'Дата':<12} {'Дождь мм':>10} {'Снег см':>9}  {'':}")
+    print(f"{'─'*40}")
+
+    days_since_rain = 0
+    last_rain_date = None
+
+    for d, r, s in zip(dates, rain, snow):
+        r = r or 0.0
+        s = s or 0.0
+        flag = ""
+        if r >= RAIN_THRESHOLD or s * 10 >= RAIN_THRESHOLD:
+            flag = "← дождь/снег"
+            last_rain_date = d
+            days_since_rain = 0
+        else:
+            days_since_rain += 1
+        print(f"{d[5:]:<12} {r:>9.1f} {s:>9.1f}  {flag}")
+
+    print(f"{'─'*40}")
+    if last_rain_date:
+        target = dates[-1]
+        t0 = datetime.strptime(target, "%Y-%m-%d")
+        tl = datetime.strptime(last_rain_date, "%Y-%m-%d")
+        days_ago = (t0 - tl).days
+        print(f"💧 Последние осадки: {last_rain_date} ({days_ago} дн. до {target})")
+    else:
+        print(f"💧 Осадков за период не зафиксировано")
+
+
 def print_summary(results, total_distance, forecast_info, soil_params):
     """Печатаем красивый итог"""
     
@@ -578,35 +625,46 @@ def print_summary(results, total_distance, forecast_info, soil_params):
 def main():
     parser = argparse.ArgumentParser(description='Trail Moisture v4 — GPX анализ')
     parser.add_argument('--gpx', type=str, required=True, help='Путь к GPX файлу')
-    parser.add_argument('--soil', type=str, default=None, 
+    parser.add_argument('--soil', type=str, default=None,
                         help='Тип почвы: sand, sandy_loam, loam, silt_loam, clay_loam, clay, chernozem')
-    parser.add_argument('--sample-km', type=float, default=5.0, 
+    parser.add_argument('--sample-km', type=float, default=5.0,
                         help='Интервал сэмплирования в км (по умолчанию 5)')
     parser.add_argument('--no-forecast', action='store_true', help='Не делать прогноз')
+    parser.add_argument('--date', type=str, default=None,
+                        help='Целевая дата в формате YYYY-MM-DD (по умолчанию сегодня). '
+                             'При указании прошедшей даты прогноз отключается.')
     args = parser.parse_args()
-    
+
+    target_date = args.date
+    display_date = target_date or datetime.now().strftime("%Y-%m-%d")
+
     print(f"\n{'='*60}")
     print(f"🚵 TRAIL MOISTURE INDEX v4 (GPX Analysis)")
-    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"📅 Анализ на дату: {display_date}")
     print(f"{'='*60}\n")
-    
+
     soil_params = get_soil_params(args.soil)
     print(f"🌍 Почва: {soil_params['name']}")
     print()
-    
+
     # Анализ трейла
     results, total_distance = analyze_trail(
-        args.gpx, 
-        soil_params, 
+        args.gpx,
+        soil_params,
         sample_km=args.sample_km,
-        verbose=True
+        verbose=True,
+        target_date=target_date,
     )
-    
-    # Прогноз
+
+    # Осадки по дням
+    print_precipitation_log(results)
+
+    # Прогноз — только для текущей/будущей даты
     forecast_info = None
-    if not args.no_forecast:
+    is_historical = target_date and target_date < datetime.now().strftime("%Y-%m-%d")
+    if not args.no_forecast and not is_historical:
         forecast_info = forecast_trail_drying(results, soil_params, verbose=True)
-    
+
     # Итог
     print_summary(results, total_distance, forecast_info, soil_params)
 
