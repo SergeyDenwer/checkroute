@@ -145,9 +145,9 @@ class RouteCardRenderer:
     # ── Height calculation ────────────────────────────────────────────────────
 
     def _total_height(self, data: RouteCardData) -> int:
-        # rows_start - card_y = (24+34) + 126 = 184; card_h = 184 + 168 + 16 = 368
+        # rows_start - card_y = (38+34) + 126 = 198; card_h = 198 + 168 + 16 = 382
         h = 110          # header
-        h += 20 + 368    # scale + status merged card
+        h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
             h += 30 + 16 + len(data.forecast_rows) * 56 + 20
         h += 40          # bottom padding
@@ -189,7 +189,7 @@ class RouteCardRenderer:
 
         bar_x = card_x + 50
         bar_w = card_w - 100
-        bar_y = card_y + 24
+        bar_y = card_y + 38
         bar_h = 34
         bb    = bar_y + bar_h          # bar bottom
 
