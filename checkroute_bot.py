@@ -261,6 +261,10 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         condition_index=compute_condition_index(dry_pct, wet_pct, mud_pct, swamp_pct),
         verdict_text=VERDICT_LABELS[verdict_level],
         verdict_level=verdict_level,
+        dry_pct=dry_pct,
+        wet_pct=wet_pct,
+        mud_pct=mud_pct,
+        swamp_pct=swamp_pct,
         forecast_rows=forecast_rows,
     )
 
