@@ -137,7 +137,8 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("🔍 Анализирую маршрут...")
 
         soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-        report = await analyze_gpx(gpx_path, soil_type, status_msg)
+        route_name = os.path.splitext(document.file_name)[0].replace('_', ' ')
+        report = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
 
         # Отправляем отчёт
         await status_msg.edit_text(report, parse_mode='HTML')
@@ -150,7 +151,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(gpx_path)
 
 
-async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
+async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = "") -> str:
     """Анализ GPX и формирование отчёта"""
     
     # Парсим GPX
@@ -219,6 +220,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     report = []
     report.append("<b>🛤 CheckRoute</b>")
     report.append(f"📏 {total_distance:.1f} км | 🌍 {soil_params['name']}")
+    if route_name:
+        report.append(f"🗺 <b>{route_name}</b>")
     report.append("")
 
     # Распределение
@@ -476,7 +479,7 @@ async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     status_msg = await query.message.reply_text(f"🔍 Анализирую {route_name}...")
 
     soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-    report = await analyze_gpx(gpx_path, soil_type, status_msg)
+    report = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
     await status_msg.edit_text(report, parse_mode='HTML')
 
 
