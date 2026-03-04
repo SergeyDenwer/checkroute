@@ -149,7 +149,7 @@ class RouteCardRenderer:
         h = 110          # header
         h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
-            h += 30 + 16 + len(data.forecast_rows) * 56 + 20
+            h += 24 + 10 + len(data.forecast_rows) * 56 + 20
         h += 40          # bottom padding
         return h
 
@@ -216,11 +216,11 @@ class RouteCardRenderer:
                    size=15, align='right', color=self.GRAY)
 
         self._text(ctx, f"{data.condition_index}%",
-                   cx, bb + 74, size=36, bold=True, align='center')
+                   cx, bb + 68, size=36, bold=True, align='center')
 
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, bb + 104, size=18, bold=True, align='center', color=vc)
+                   cx, bb + 88, size=18, bold=True, align='center', color=vc)
 
         # "Состояние:" — small label just above first row dots, same left indent
         self._text(ctx, "Состояние:", card_x + 14, rows_start - 4,
@@ -259,8 +259,8 @@ class RouteCardRenderer:
     def _draw_forecast_section(self, ctx, data: RouteCardData, y0: int) -> int:
         pad     = self.H_PAD
         row_h   = 56
-        title_y = y0 + 30
-        card_y  = title_y + 16
+        title_y = y0 + 24
+        card_y  = title_y + 10
         card_w  = self.WIDTH - pad * 2
         card_h  = len(data.forecast_rows) * row_h + 20
 
@@ -268,7 +268,7 @@ class RouteCardRenderer:
                    pad + 4, title_y, size=20, color=self.GRAY)
 
         for i, row in enumerate(data.forecast_rows):
-            ry = card_y + 10 + i * row_h
+            ry = card_y + i * row_h
 
             # Divider between rows
             if i > 0:
