@@ -474,29 +474,6 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
     }
 
 
-def get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct):
-    """
-    Вердикт по трейлу на основе распределения статусов.
-    4 уровня:
-    - МОЖНО: >= 70% сухо
-    - СКОРЕЕ МОЖНО: >= 50% сухо ИЛИ (сухо+влажно >= 80% И сухо >= 30%)
-    - СКОРЕЕ НЕЛЬЗЯ: сухо+влажно >= 50% но не дотягивает до "скорее можно"
-    - НЕЛЬЗЯ: грязь+месиво > 50%
-    """
-    good = dry_pct
-    ok = dry_pct + wet_pct
-    bad = mud_pct + swamp_pct
-    
-    if good >= 70:
-        return "✅ МОЖНО", "Вперед!", 4
-    elif good >= 50 or (ok >= 80 and good >= 30):
-        return "🟢 СКОРЕЕ МОЖНО", "Но это не точно", 3
-    elif ok >= 50:
-        return "🟠 СКОРЕЕ НЕЛЬЗЯ", "Чистым домой не вернёшься", 2
-    else:
-        return "🔴 НЕЛЬЗЯ", "Не лезь, блядь, дебил сука ебаный. Оно тебя сожрёт!", 1
-
-
 def print_summary(results, total_distance, forecast_info, soil_params):
     """Печатаем красивый итог"""
     
@@ -523,7 +500,16 @@ def print_summary(results, total_distance, forecast_info, soil_params):
     mud_pct = agg.get("mud", {}).get("percent", 0)
     swamp_pct = agg.get("swamp", {}).get("percent", 0)
     
-    verdict, comment, _ = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
+    good = dry_pct
+    ok = dry_pct + wet_pct
+    if good >= 70:
+        verdict, comment = "✅ МОЖНО", "Вперед!"
+    elif good >= 50 or (ok >= 80 and good >= 30):
+        verdict, comment = "🟢 СКОРЕЕ МОЖНО", "Но это не точно"
+    elif ok >= 50:
+        verdict, comment = "🟠 СКОРЕЕ НЕЛЬЗЯ", "Чистым домой не вернёшься"
+    else:
+        verdict, comment = "🔴 НЕЛЬЗЯ", "Не лезь, блядь, дебил сука ебаный. Оно тебя сожрёт!"
     print(f"🎯 {verdict}")
     print(f"   {comment}")
     
@@ -538,7 +524,11 @@ def print_summary(results, total_distance, forecast_info, soil_params):
         
         for ds in forecast_info["daily_stats"][:12]:  # первые 12 дней
             date_short = ds["date"][5:]  # убираем год
-            v, _, _ = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            g, o = ds["dry_pct"], ds["dry_pct"] + ds["wet_pct"]
+            if g >= 70: v = "✅ МОЖНО"
+            elif g >= 50 or (o >= 80 and g >= 30): v = "🟢 СКОРЕЕ МОЖНО"
+            elif o >= 50: v = "🟠 СКОРЕЕ НЕЛЬЗЯ"
+            else: v = "🔴 НЕЛЬЗЯ"
             print(f"{date_short:<12} {ds['dry_pct']:>5.0f}% {ds['wet_pct']:>6.0f}% "
                   f"{ds['mud_pct']:>5.0f}% {ds['swamp_pct']:>6.0f}%  {v:<20}")
         
@@ -548,7 +538,11 @@ def print_summary(results, total_distance, forecast_info, soil_params):
         prev_verdict = None
         transitions = []
         for ds in forecast_info["daily_stats"]:
-            v, _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            g, o = ds["dry_pct"], ds["dry_pct"] + ds["wet_pct"]
+            if g >= 70: v, level = "✅ МОЖНО", 4
+            elif g >= 50 or (o >= 80 and g >= 30): v, level = "🟢 СКОРЕЕ МОЖНО", 3
+            elif o >= 50: v, level = "🟠 СКОРЕЕ НЕЛЬЗЯ", 2
+            else: v, level = "🔴 НЕЛЬЗЯ", 1
             if v != prev_verdict:
                 transitions.append((ds["date"], v, level))
                 prev_verdict = v

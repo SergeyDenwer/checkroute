@@ -24,7 +24,6 @@ from trail_moisture_v4 import (
     fetch_weather_data,
     simulate_moisture,
     get_status,
-    get_trail_verdict,
     aggregate_status,
     forecast_trail_drying,
     haversine_distance,
@@ -213,8 +212,17 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
     mud_pct = agg.get("mud", {}).get("percent", 0)
     swamp_pct = agg.get("swamp", {}).get("percent", 0)
     
-    verdict, comment, _ = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
-    
+    good = dry_pct
+    ok = dry_pct + wet_pct
+    if good >= 70:
+        verdict, comment = "✅ МОЖНО", "Вперед!"
+    elif good >= 50 or (ok >= 80 and good >= 30):
+        verdict, comment = "🟢 СКОРЕЕ МОЖНО", "Но это не точно"
+    elif ok >= 50:
+        verdict, comment = "🟠 СКОРЕЕ НЕЛЬЗЯ", "Чистым домой не вернёшься"
+    else:
+        verdict, comment = "🔴 НЕЛЬЗЯ", "Не лезь, блядь, дебил сука ебаный. Оно тебя сожрёт!"
+
     # Формируем отчёт
     report = []
     report.append("<b>🛤 CheckRoute</b>")
@@ -262,7 +270,11 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message) -> str:
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
-            v, _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            g, o = ds["dry_pct"], ds["dry_pct"] + ds["wet_pct"]
+            if g >= 70: v, level = "✅ МОЖНО", 4
+            elif g >= 50 or (o >= 80 and g >= 30): v, level = "🟢 СКОРЕЕ МОЖНО", 3
+            elif o >= 50: v, level = "🟠 СКОРЕЕ НЕЛЬЗЯ", 2
+            else: v, level = "🔴 НЕЛЬЗЯ", 1
             if level not in seen_levels:
                 transitions.append((ds["date"], v, level))
                 seen_levels.add(level)
@@ -327,7 +339,12 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     today_wet = agg.get("wet", {}).get("percent", 0)
     today_mud = agg.get("mud", {}).get("percent", 0)
     today_swamp = agg.get("swamp", {}).get("percent", 0)
-    _, _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
+    good = today_dry
+    ok = today_dry + today_wet
+    if good >= 70: today_level = 4
+    elif good >= 50 or (ok >= 80 and good >= 30): today_level = 3
+    elif ok >= 50: today_level = 2
+    else: today_level = 1
 
     # Прогноз — берём меньше точек чтобы не долбить API
     tomorrow_dry = today_dry
