@@ -1,5 +1,5 @@
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
-export $(cat .env | xargs)
+set -a; source .env; set +a
 exec python checkroute_bot.py
