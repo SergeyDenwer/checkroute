@@ -96,19 +96,29 @@ class RouteCardRenderer:
     GRAY    : Color = (0.58,  0.58,  0.58)
     DIVIDER : Color = (0.16,  0.16,  0.16)
 
-    _STATUS_ROWS = [
-        ("dry_pct",   "СУХО",   (0.18, 0.80, 0.44)),
-        ("wet_pct",   "ВЛАЖНО", (1.00, 0.60, 0.00)),
-        ("mud_pct",   "ГРЯЗЬ",  (0.93, 0.20, 0.20)),
-        ("swamp_pct", "МЕСИВО", (0.45, 0.04, 0.04)),
-    ]
+    # Single source of truth for the 4-level status palette (best → worst).
+    # Tailwind: emerald-400 → amber-400 → orange-500 → red-500
+    _P: tuple = (
+        (0.204, 0.827, 0.600),   # #34D399  green
+        (0.984, 0.749, 0.141),   # #FBBF24  yellow
+        (0.976, 0.451, 0.086),   # #F97316  orange
+        (0.937, 0.267, 0.267),   # #EF4444  red
+    )
 
-    VERDICT_COLOR = {
-        1: (0.93, 0.20, 0.20),   # red
-        2: (1.00, 0.58, 0.00),   # orange
-        3: (0.35, 0.85, 0.25),   # green
-        4: (0.10, 0.95, 0.10),   # bright green
-    }
+    @property
+    def _STATUS_ROWS(self):
+        p = self._P
+        return [
+            ("dry_pct",   "СУХО",   p[0]),
+            ("wet_pct",   "ВЛАЖНО", p[1]),
+            ("mud_pct",   "ГРЯЗЬ",  p[2]),
+            ("swamp_pct", "МЕСИВО", p[3]),
+        ]
+
+    @property
+    def VERDICT_COLOR(self):
+        p = self._P
+        return {4: p[0], 3: p[1], 2: p[2], 1: p[3]}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -302,12 +312,13 @@ class RouteCardRenderer:
         """
         r = bh / 2   # rounded-end radius
 
-        # ── Gradient bar ──────────────────────────────────────────────────
+        # ── Gradient bar — stops match _P palette ─────────────────────────
+        p = self._P
         grad = cairo.LinearGradient(bx, 0, bx + bw, 0)
-        grad.add_color_stop_rgb(0.00, 0.18, 0.80, 0.44)  # green
-        grad.add_color_stop_rgb(0.35, 0.85, 0.85, 0.10)  # yellow-green
-        grad.add_color_stop_rgb(0.60, 1.00, 0.50, 0.00)  # orange
-        grad.add_color_stop_rgb(1.00, 0.92, 0.15, 0.15)  # red
+        grad.add_color_stop_rgb(0.00, *p[0])   # green
+        grad.add_color_stop_rgb(0.33, *p[1])   # yellow
+        grad.add_color_stop_rgb(0.67, *p[2])   # orange
+        grad.add_color_stop_rgb(1.00, *p[3])   # red
         ctx.set_source(grad)
         self._rounded_rect(ctx, bx, by, bw, bh, r)
         ctx.fill()
