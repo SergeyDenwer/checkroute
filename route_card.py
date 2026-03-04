@@ -267,10 +267,6 @@ class RouteCardRenderer:
         self._text(ctx, "Когда можно ехать:",
                    pad + 4, title_y, size=20, color=self.GRAY)
 
-        ctx.set_source_rgb(*self.CARD)
-        self._rounded_rect(ctx, pad, card_y, card_w, card_h, r=14)
-        ctx.fill()
-
         for i, row in enumerate(data.forecast_rows):
             ry = card_y + 10 + i * row_h
 
