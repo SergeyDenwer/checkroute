@@ -175,8 +175,8 @@ class RouteCardRenderer:
         ctx.fill()
 
         cx    = self.WIDTH / 2
-        bar_x = card_x + 36
-        bar_w = card_w - 72
+        bar_x = card_x + 50
+        bar_w = card_w - 100
         bar_y = card_y + 60
         bar_h = 34
 
@@ -193,14 +193,14 @@ class RouteCardRenderer:
 
         # Percentage
         self._text(ctx, f"{data.condition_index}%",
-                   cx, bar_y + bar_h + 96,
-                   size=44, bold=True, align='center')
+                   cx, bar_y + bar_h + 86,
+                   size=36, bold=True, align='center')
 
         # Verdict
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, bar_y + bar_h + 138,
-                   size=22, bold=True, align='center', color=vc)
+                   cx, bar_y + bar_h + 118,
+                   size=18, bold=True, align='center', color=vc)
 
         return y0 + 24 + card_h
 
@@ -221,14 +221,14 @@ class RouteCardRenderer:
         card_w  = self.WIDTH - pad * 2
         card_h  = 4 * row_h + 20
 
-        self._text(ctx, "СОСТОЯНИЕ:", pad, title_y, size=20, color=self.GRAY)
+        self._text(ctx, "Состояние:", pad + 4, title_y, size=20, color=self.GRAY)
 
         ctx.set_source_rgb(*self.CARD)
         self._rounded_rect(ctx, pad, card_y, card_w, card_h, r=14)
         ctx.fill()
 
         bar_x   = pad + 170
-        bar_w   = card_w - 170 - 52
+        bar_w   = card_w - 170 - 90
         bar_h   = 10
         bar_r   = bar_h / 2
         pct_x   = pad + card_w - 12
@@ -281,7 +281,7 @@ class RouteCardRenderer:
         card_h  = len(data.forecast_rows) * row_h + 20
 
         self._text(ctx, "Когда можно ехать:",
-                   pad, title_y, size=20, color=self.GRAY)
+                   pad + 4, title_y, size=20, color=self.GRAY)
 
         ctx.set_source_rgb(*self.CARD)
         self._rounded_rect(ctx, pad, card_y, card_w, card_h, r=14)
