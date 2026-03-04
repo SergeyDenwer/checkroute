@@ -135,10 +135,9 @@ class RouteCardRenderer:
     # ── Height calculation ────────────────────────────────────────────────────
 
     def _total_height(self, data: RouteCardData) -> int:
-        # Combined scale+status card
-        # rows_start - card_y = (24+34) + 118 = 176; card_h = 176 + 168 + 16 = 360
+        # rows_start - card_y = (24+34) + 126 = 184; card_h = 184 + 168 + 16 = 368
         h = 110          # header
-        h += 20 + 360    # scale + status merged card
+        h += 20 + 368    # scale + status merged card
         if data.forecast_rows:
             h += 30 + 16 + len(data.forecast_rows) * 56 + 20
         h += 40          # bottom padding
@@ -178,22 +177,19 @@ class RouteCardRenderer:
         card_w = self.WIDTH - pad * 2
         cx     = self.WIDTH / 2
 
-        # Scale bar — labels sit outside the bar ends so pin never overlaps
-        bar_x = card_x + 70
-        bar_w = card_w - 140
+        bar_x = card_x + 50
+        bar_w = card_w - 100
         bar_y = card_y + 24
         bar_h = 34
         bb    = bar_y + bar_h          # bar bottom
 
-        # Status rows — dot indented to leave room for "Состояние:" on row 0
         status_row_h = 42
-        dot_x = card_x + 105
-        sb_x  = card_x + 230
-        sb_w  = card_w - 230 - 70
+        sb_x  = card_x + 170
+        sb_w  = card_w - 170 - 90
         sb_bh = 10
         pct_x = card_x + card_w - 14
 
-        rows_start = bb + 118
+        rows_start = bb + 126
         card_h     = (rows_start - card_y) + 4 * status_row_h + 16
 
         # Card background
@@ -205,39 +201,33 @@ class RouteCardRenderer:
         self._draw_condition_scale(ctx, bar_x, bar_y, bar_w, bar_h,
                                    data.condition_index)
 
-        # Labels outside the bar — pin cannot reach them
-        self._text(ctx, "СУХО",   bar_x - 5,         bb + 22,
+        self._text(ctx, "СУХО",   bar_x,         bb + 28, size=15, color=self.GRAY)
+        self._text(ctx, "МЕСИВО", bar_x + bar_w, bb + 28,
                    size=15, align='right', color=self.GRAY)
-        self._text(ctx, "МЕСИВО", bar_x + bar_w + 5, bb + 22,
-                   size=15, color=self.GRAY)
 
         self._text(ctx, f"{data.condition_index}%",
-                   cx, bb + 70, size=36, bold=True, align='center')
+                   cx, bb + 74, size=36, bold=True, align='center')
 
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, bb + 100, size=18, bold=True, align='center', color=vc)
+                   cx, bb + 104, size=18, bold=True, align='center', color=vc)
 
-        # ── Status bars ("Состояние:" inline with first row, no divider) ──────
+        # "Состояние:" — small label just above first row dots, same left indent
+        self._text(ctx, "Состояние:", card_x + 14, rows_start - 4,
+                   size=13, color=self.GRAY)
+
+        # ── Status bars (no dividers) ─────────────────────────────────────────
         for i, (field_name, label, color) in enumerate(self._STATUS_ROWS):
             pct   = getattr(data, field_name)
             ry    = rows_start + i * status_row_h
             mid_y = ry + status_row_h / 2
             text_y = mid_y + 7
 
-            if i == 0:
-                self._text(ctx, "Состояние:", card_x + 4, text_y,
-                           size=14, color=self.GRAY)
-            else:
-                ctx.set_source_rgb(*self.DIVIDER)
-                ctx.rectangle(card_x + 14, ry, card_w - 28, 1)
-                ctx.fill()
-
             ctx.set_source_rgb(*color)
-            ctx.arc(dot_x, mid_y, 7, 0, 2 * math.pi)
+            ctx.arc(card_x + 22, mid_y, 7, 0, 2 * math.pi)
             ctx.fill()
 
-            self._text(ctx, label, dot_x + 16, text_y, size=18, bold=True)
+            self._text(ctx, label, card_x + 38, text_y, size=18, bold=True)
 
             by = mid_y - sb_bh / 2
             ctx.set_source_rgb(0.12, 0.12, 0.12)
