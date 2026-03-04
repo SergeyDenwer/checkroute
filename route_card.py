@@ -125,10 +125,10 @@ class RouteCardRenderer:
 
     def _total_height(self, data: RouteCardData) -> int:
         h = 110                                             # header
-        h += 400                                            # speedometer card
+        h += 448                                            # speedometer card
         if data.forecast_rows:
-            h += 22 + 14 + len(data.forecast_rows) * 56 + 20   # forecast
-        h += 32                                             # bottom padding
+            h += 30 + 16 + len(data.forecast_rows) * 56 + 20   # forecast
+        h += 40                                             # bottom padding
         return h
 
     # ── Section: header ───────────────────────────────────────────────────────
@@ -160,31 +160,31 @@ class RouteCardRenderer:
 
     def _draw_speedometer_section(self, ctx, data: RouteCardData, y0: int) -> int:
         card_x = self.H_PAD
-        card_y = y0 + 20
+        card_y = y0 + 28
         card_w = self.WIDTH - self.H_PAD * 2
-        card_h = 380
+        card_h = 420
 
         ctx.set_source_rgb(*self.CARD)
         self._rounded_rect(ctx, card_x, card_y, card_w, card_h, r=14)
         ctx.fill()
 
         cx = self.WIDTH / 2
-        cy = card_y + 208
+        cy = card_y + 240
         self._draw_speedometer(ctx, cx, cy, data.condition_index)
 
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, cy + 122, size=25, bold=True, align='center', color=vc)
+                   cx, cy + 128, size=26, bold=True, align='center', color=vc)
 
-        return y0 + 20 + card_h
+        return y0 + 28 + card_h
 
     # ── Section: forecast ─────────────────────────────────────────────────────
 
     def _draw_forecast_section(self, ctx, data: RouteCardData, y0: int) -> int:
         pad     = self.H_PAD
         row_h   = 56
-        title_y = y0 + 22
-        card_y  = title_y + 14
+        title_y = y0 + 30
+        card_y  = title_y + 16
         card_w  = self.WIDTH - pad * 2
         card_h  = len(data.forecast_rows) * row_h + 20
 
@@ -222,7 +222,7 @@ class RouteCardRenderer:
                        pad + card_w - 18, text_y,
                        size=21, align='right', color=self.GRAY)
 
-        return y0 + 22 + 14 + card_h
+        return y0 + 30 + 16 + card_h
 
     # ── Speedometer ───────────────────────────────────────────────────────────
 
@@ -232,11 +232,11 @@ class RouteCardRenderer:
         Arc sweeps top half from left (9 o'clock) to right (3 o'clock).
         Needle angle: π (left, value=0)  →  2π (right, value=100).
         """
-        R         = 150  # arc radius
-        thick     = 27   # arc stroke width
-        nlen      = 126  # needle length
+        R         = 195  # arc radius
+        thick     = 28   # arc stroke width
+        nlen      = 162  # needle length
         tick_in   = R - 28
-        tick_out  = R - 48
+        tick_out  = R - 50
 
         # ── Arc: yellow → red gradient ────────────────────────────────────
         grad = cairo.LinearGradient(cx - R, cy, cx + R, cy)
