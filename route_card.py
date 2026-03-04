@@ -125,7 +125,7 @@ class RouteCardRenderer:
 
     def _total_height(self, data: RouteCardData) -> int:
         h = 110                                             # header
-        h += 448                                            # speedometer card
+        h += 284                                            # scale card
         if data.forecast_rows:
             h += 30 + 16 + len(data.forecast_rows) * 56 + 20   # forecast
         h += 40                                             # bottom padding
@@ -156,27 +156,47 @@ class RouteCardRenderer:
 
         return y0 + h
 
-    # ── Section: speedometer card ─────────────────────────────────────────────
+    # ── Section: condition scale card ────────────────────────────────────────
 
     def _draw_speedometer_section(self, ctx, data: RouteCardData, y0: int) -> int:
         card_x = self.H_PAD
-        card_y = y0 + 28
+        card_y = y0 + 24
         card_w = self.WIDTH - self.H_PAD * 2
-        card_h = 420
+        card_h = 260
 
         ctx.set_source_rgb(*self.CARD)
         self._rounded_rect(ctx, card_x, card_y, card_w, card_h, r=14)
         ctx.fill()
 
-        cx = self.WIDTH / 2
-        cy = card_y + 240
-        self._draw_speedometer(ctx, cx, cy, data.condition_index)
+        cx    = self.WIDTH / 2
+        bar_x = card_x + 50
+        bar_w = card_w - 100
+        bar_y = card_y + 60
+        bar_h = 34
 
+        self._draw_condition_scale(ctx, bar_x, bar_y, bar_w, bar_h,
+                                   data.condition_index)
+
+        # End labels
+        self._text(ctx, "СУХО",
+                   bar_x, bar_y + bar_h + 28,
+                   size=17, color=self.GRAY)
+        self._text(ctx, "МЕСИВО",
+                   bar_x + bar_w, bar_y + bar_h + 28,
+                   size=17, align='right', color=self.GRAY)
+
+        # Percentage
+        self._text(ctx, f"{data.condition_index}%",
+                   cx, bar_y + bar_h + 102,
+                   size=52, bold=True, align='center')
+
+        # Verdict
         vc = self.VERDICT_COLOR[data.verdict_level]
         self._text(ctx, data.verdict_text,
-                   cx, cy + 128, size=26, bold=True, align='center', color=vc)
+                   cx, bar_y + bar_h + 148,
+                   size=26, bold=True, align='center', color=vc)
 
-        return y0 + 28 + card_h
+        return y0 + 24 + card_h
 
     # ── Section: forecast ─────────────────────────────────────────────────────
 
@@ -224,62 +244,61 @@ class RouteCardRenderer:
 
         return y0 + 30 + 16 + card_h
 
-    # ── Speedometer ───────────────────────────────────────────────────────────
+    # ── Condition scale (horizontal bar) ─────────────────────────────────────
 
-    def _draw_speedometer(self, ctx, cx: float, cy: float, value: int):
+    def _draw_condition_scale(self, ctx,
+                              bx: float, by: float,
+                              bw: float, bh: float,
+                              value: int):
         """
-        Classic semi-circular speedometer.
-        Arc sweeps top half from left (9 o'clock) to right (3 o'clock).
-        Needle angle: π (left, value=0)  →  2π (right, value=100).
+        Horizontal gradient bar: green (dry, left) → red (swamp, right).
+        A white pin marks the current condition_index (0–100).
         """
-        R         = 195  # arc radius
-        thick     = 28   # arc stroke width
-        nlen      = 162  # needle length
-        tick_in   = R - 28
-        tick_out  = R - 50
+        r = bh / 2   # rounded-end radius
 
-        # ── Arc: yellow → red gradient ────────────────────────────────────
-        grad = cairo.LinearGradient(cx - R, cy, cx + R, cy)
-        grad.add_color_stop_rgb(0, 1.0, 0.96, 0.0)   # #FFF500
-        grad.add_color_stop_rgb(1, 1.0, 0.0,  0.0)   # #FF0000
+        # ── Gradient bar ──────────────────────────────────────────────────
+        grad = cairo.LinearGradient(bx, 0, bx + bw, 0)
+        grad.add_color_stop_rgb(0.00, 0.18, 0.80, 0.44)  # green
+        grad.add_color_stop_rgb(0.35, 0.85, 0.85, 0.10)  # yellow-green
+        grad.add_color_stop_rgb(0.60, 1.00, 0.50, 0.00)  # orange
+        grad.add_color_stop_rgb(1.00, 0.92, 0.15, 0.15)  # red
         ctx.set_source(grad)
-        ctx.set_line_width(thick)
-        ctx.set_line_cap(cairo.LINE_CAP_BUTT)
-        ctx.arc(cx, cy, R, math.pi, 2 * math.pi)
-        ctx.stroke()
-
-        # ── Tick marks ────────────────────────────────────────────────────
-        ctx.set_source_rgb(*self.WHITE)
-        ctx.set_line_width(3)
-        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
-        for i in range(6):
-            a  = math.pi + i * math.pi / 5
-            sx = cx + tick_in  * math.cos(a)
-            sy = cy + tick_in  * math.sin(a)
-            ex = cx + tick_out * math.cos(a)
-            ey = cy + tick_out * math.sin(a)
-            ctx.move_to(sx, sy)
-            ctx.line_to(ex, ey)
-            ctx.stroke()
-
-        # ── Needle ────────────────────────────────────────────────────────
-        na = math.pi + (value / 100) * math.pi
-        ctx.set_source_rgb(*self.WHITE)
-        ctx.set_line_width(4)
-        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
-        ctx.move_to(cx, cy)
-        ctx.line_to(cx + nlen * math.cos(na),
-                    cy + nlen * math.sin(na))
-        ctx.stroke()
-
-        # ── Center cap ────────────────────────────────────────────────────
-        ctx.set_source_rgb(*self.WHITE)
-        ctx.arc(cx, cy, 11, 0, 2 * math.pi)
+        self._rounded_rect(ctx, bx, by, bw, bh, r)
         ctx.fill()
 
-        # ── Percentage label ──────────────────────────────────────────────
-        self._text(ctx, f"{value}%",
-                   cx, cy + 78, size=52, bold=True, align='center')
+        # ── Subtle inner shadow / depth line ─────────────────────────────
+        ctx.set_source_rgba(0, 0, 0, 0.18)
+        self._rounded_rect(ctx, bx, by, bw, bh, r)
+        ctx.set_line_width(2)
+        ctx.stroke()
+
+        # ── Marker pin ───────────────────────────────────────────────────
+        mx = bx + bw * (value / 100)
+        mx = max(bx + r, min(bx + bw - r, mx))   # clamp to bar bounds
+
+        pin_top    = by - 18
+        pin_bottom = by + bh + 14
+        pin_r      = 7
+
+        # Shadow behind pin
+        ctx.set_source_rgba(0, 0, 0, 0.35)
+        ctx.set_line_width(5)
+        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+        ctx.move_to(mx, pin_top + 2)
+        ctx.line_to(mx, pin_bottom + 2)
+        ctx.stroke()
+
+        # White line
+        ctx.set_source_rgb(*self.WHITE)
+        ctx.set_line_width(3)
+        ctx.move_to(mx, pin_top)
+        ctx.line_to(mx, pin_bottom)
+        ctx.stroke()
+
+        # Circle at top
+        ctx.set_source_rgb(*self.WHITE)
+        ctx.arc(mx, pin_top, pin_r, 0, 2 * math.pi)
+        ctx.fill()
 
     # ── Drawing helpers ───────────────────────────────────────────────────────
 
