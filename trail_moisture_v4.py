@@ -111,7 +111,7 @@ def sample_points_by_distance(points, sample_km=5.0):
 
 
 # Покрытия, которые не имеют смысла анализировать (грязи там нет)
-PAVED_SURFACES = {"asphalt", "paved", "concrete"}
+PAVED_SURFACES = {"asphalt", "paved", "concrete", "sett"}
 
 
 def get_point_at_distance(points, target_dist_km):
