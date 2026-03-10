@@ -27,7 +27,7 @@ from route_card import (
 from trail_moisture_v4 import (
     parse_gpx,
     sample_points_by_distance,
-    get_soil_params,
+
     fetch_weather_data,
     fetch_surface_type,
     apply_surface_modifiers,
@@ -128,9 +128,8 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Анализируем
         await status_msg.edit_text("🔍 Анализирую маршрут...")
 
-        soil_type = context.user_data.get('soil', DEFAULT_SOIL)
         route_name = os.path.splitext(document.file_name)[0].replace('_', ' ')
-        card_data, error = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
+        card_data, error = await analyze_gpx(gpx_path, DEFAULT_SOIL, status_msg, route_name)
 
         if error:
             await status_msg.edit_text(error, parse_mode='HTML')
@@ -165,7 +164,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     )
 
     sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
-    soil_params = get_soil_params(soil_type)
+    soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
 
     await message.edit_text(
         f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
@@ -362,7 +361,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ В папке routes/ нет GPX файлов")
         return
 
-    soil_params = get_soil_params(DEFAULT_SOIL)
+    soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
 
     # Целевые даты
     today = datetime.now().date()
@@ -477,8 +476,7 @@ async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
     status_msg = await query.message.reply_text(f"🔍 Анализирую {route_name}...")
 
-    soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-    card_data, error = await analyze_gpx(gpx_path, soil_type, status_msg, route_name)
+    card_data, error = await analyze_gpx(gpx_path, DEFAULT_SOIL, status_msg, route_name)
 
     if error:
         await status_msg.edit_text(error, parse_mode='HTML')
