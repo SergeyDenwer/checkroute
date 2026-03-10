@@ -164,8 +164,13 @@ def fetch_forecast(lat, lon, days_ahead=16):
     return response.json()
 
 
-def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, days_since_rain, soil_params):
-    """Один шаг симуляции влажности (один день)."""
+def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index, soil_params):
+    """Один шаг симуляции влажности (один день).
+
+    wet_index ∈ [0, 1] — экспоненциальная память о последних дождях.
+    0 = давно сухо, 1 = только что сильный дождь.
+    Заменяет бинарный days_since_rain.
+    """
     DESORPTIVITY = soil_params["desorptivity"]
     CAPACITY = soil_params["capacity"]
     STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
@@ -182,49 +187,52 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
         snow_cover = max(0, snow_cover)
         water_input += actual_melt
 
-    if water_input >= RAIN_THRESHOLD:
-        days_since_rain = 1
-    else:
-        days_since_rain += 1
+    # Плавное обновление wet_index: каждый мм дождя вносит вклад, каждый сухой день гасит 15%
+    rain_signal = water_input / (water_input + 5.0) if water_input > 0 else 0.0
+    wet_index = min(1.0, wet_index * 0.85 + rain_signal)
 
     if snow_cover > 5:
         evaporation = 0.05
     elif surface_moisture > STAGE1_THRESHOLD:
         evaporation = eto * 0.9
     else:
-        str_factor = math.sqrt(days_since_rain) - math.sqrt(days_since_rain - 1)
+        # Stage 2: sorptivity formula; effective_t выводится из wet_index
+        # wet_index=1 → effective_t=1 (быстро сохнет после дождя)
+        # wet_index→0 → effective_t→большое (медленно после долгой сухости)
+        effective_t = max(1.0, 1.0 / max(0.01, wet_index))
+        str_factor = math.sqrt(effective_t) - math.sqrt(effective_t - 1)
         evaporation = DESORPTIVITY * str_factor
 
     evaporation = min(evaporation, surface_moisture)
     surface_moisture = surface_moisture + water_input - evaporation
     surface_moisture = max(0, min(surface_moisture, CAPACITY))
 
-    return surface_moisture, snow_cover, days_since_rain
+    return surface_moisture, snow_cover, wet_index
 
 
 def simulate_moisture(weather_data, soil_params):
     """Симуляция влажности поверхностного слоя по историческим данным."""
     daily = weather_data["daily"]
-    surface_moisture = 0
-    snow_cover = 0
-    days_since_rain = 1
+    surface_moisture = 0.0
+    snow_cover = 0.0
+    wet_index = 0.0
 
     for i in range(len(daily["time"])):
-        surface_moisture, snow_cover, days_since_rain = _simulate_day(
+        surface_moisture, snow_cover, wet_index = _simulate_day(
             temp_mean=daily["temperature_2m_mean"][i] or 0,
             rain=daily["rain_sum"][i] or 0,
             snowfall_cm=daily["snowfall_sum"][i] or 0,
             eto=daily["et0_fao_evapotranspiration"][i] or 0,
             surface_moisture=surface_moisture,
             snow_cover=snow_cover,
-            days_since_rain=days_since_rain,
+            wet_index=wet_index,
             soil_params=soil_params,
         )
 
     return {
         "moisture": surface_moisture,
         "capacity": soil_params["capacity"],
-        "days_dry": days_since_rain,
+        "wet_index": wet_index,
         "snow_cover": snow_cover,
     }
 
@@ -234,19 +242,19 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
     daily = forecast_data["daily"]
     surface_moisture = initial_state["moisture"]
     snow_cover = initial_state.get("snow_cover", 0)
-    days_since_rain = initial_state["days_dry"]
+    wet_index = initial_state.get("wet_index", 0.0)
     results = []
 
     for i in range(len(daily["time"])):
         temp_mean = ((daily["temperature_2m_max"][i] or 0) + (daily["temperature_2m_min"][i] or 0)) / 2
-        surface_moisture, snow_cover, days_since_rain = _simulate_day(
+        surface_moisture, snow_cover, wet_index = _simulate_day(
             temp_mean=temp_mean,
             rain=daily["rain_sum"][i] or 0,
             snowfall_cm=daily["snowfall_sum"][i] or 0,
             eto=daily["et0_fao_evapotranspiration"][i] or 0,
             surface_moisture=surface_moisture,
             snow_cover=snow_cover,
-            days_since_rain=days_since_rain,
+            wet_index=wet_index,
             soil_params=soil_params,
         )
         results.append({
@@ -254,11 +262,53 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
             "moisture": surface_moisture,
             "capacity": soil_params["capacity"],
             "rain": daily["rain_sum"][i] or 0,
-            "days_dry": days_since_rain,
+            "wet_index": wet_index,
             "snow_cover": snow_cover,
         })
 
     return results
+
+
+def fetch_route_surface(points: list) -> str:
+    """
+    Определяет преобладающий тип покрытия для маршрута через OSM Overpass API.
+    Один запрос по bounding box всего трека.
+    Возвращает OSM surface tag или 'ground' если не найдено/ошибка.
+    """
+    if not points:
+        return "ground"
+
+    lats = [p[0] for p in points]
+    lons = [p[1] for p in points]
+    south = min(lats) - 0.001
+    north = max(lats) + 0.001
+    west  = min(lons) - 0.001
+    east  = max(lons) + 0.001
+
+    query = (
+        f"[out:json][timeout:15];"
+        f"way({south},{west},{north},{east})[highway][surface];"
+        f"out tags;"
+    )
+    try:
+        resp = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": query},
+            timeout=18,
+        )
+        if resp.status_code != 200:
+            return "ground"
+        elements = resp.json().get("elements", [])
+        surfaces = [
+            el["tags"]["surface"]
+            for el in elements
+            if "surface" in el.get("tags", {})
+        ]
+        if not surfaces:
+            return "ground"
+        return max(set(surfaces), key=surfaces.count)
+    except Exception:
+        return "ground"
 
 
 def get_status(moisture, capacity):
@@ -319,7 +369,7 @@ def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
                 "distance_km": dist_km,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
-                "days_dry": state["days_dry"],
+                "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
                 "status_label": status_label,
                 "status_key": status_key,
@@ -388,7 +438,7 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
             initial_state = {
                 "moisture": point["moisture"],
                 "capacity": point["capacity"],
-                "days_dry": point["days_dry"],
+                "wet_index": point["wet_index"],
                 "snow_cover": point["snow_cover"],
             }
             
