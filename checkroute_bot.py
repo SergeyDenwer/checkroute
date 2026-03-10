@@ -37,6 +37,8 @@ from trail_moisture_v4 import (
     forecast_trail_drying,
     haversine_distance,
     SOIL_PARAMS_TABLE,
+    PAVED_SURFACES,
+    get_point_at_distance,
 )
 
 # Настройка логирования
@@ -174,8 +176,17 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     errors = 0
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
-            weather = fetch_weather_data(lat, lon, days_back=14)
             surface = fetch_surface_type(lat, lon)
+            if surface in PAVED_SURFACES:
+                # Пробуем точку +1 км по треку
+                shifted = get_point_at_distance(points, dist_km + 1.0)
+                if shifted is None:
+                    continue  # конец трека — пропускаем
+                lat, lon, elev, dist_km = shifted
+                surface = fetch_surface_type(lat, lon)
+                if surface in PAVED_SURFACES:
+                    continue  # снова асфальт — пропускаем
+            weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
@@ -269,8 +280,16 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     results = []
     for lat, lon, elev, dist_km in sampled:
         try:
-            weather = fetch_weather_data(lat, lon, days_back=14)
             surface = fetch_surface_type(lat, lon)
+            if surface in PAVED_SURFACES:
+                shifted = get_point_at_distance(points, dist_km + 1.0)
+                if shifted is None:
+                    continue
+                lat, lon, elev, dist_km = shifted
+                surface = fetch_surface_type(lat, lon)
+                if surface in PAVED_SURFACES:
+                    continue
+            weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
