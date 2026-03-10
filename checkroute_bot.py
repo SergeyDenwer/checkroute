@@ -28,7 +28,6 @@ from route_card import (
 from trail_moisture_v4 import (
     parse_gpx,
     sample_points_by_distance,
-
     fetch_weather_data,
     fetch_surface_type,
     apply_surface_modifiers,
@@ -52,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Дефолтные настройки
 DEFAULT_SAMPLE_KM = 5.0
 DEFAULT_SOIL = "loam"
-ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes_test")
+ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
 VERDICT_LABELS = {
     0: "ДОЖДЬ",
