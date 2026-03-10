@@ -177,7 +177,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     _SURFACE_ICONS = {
         "asphalt": "🛣", "paved": "🛣", "concrete": "🛣",
         "gravel": "🪨", "fine_gravel": "🪨", "compacted": "🪨",
-        "ground": "🌱", "dirt": "🌱", "grass": "🌿",
+        "ground": "🌱", "dirt": "🌱", "unpaved": "🌱", "grass": "🌿",
         "sand": "🏖", "mud": "💧", "rock": "⛰",
     }
 
@@ -456,7 +456,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _SURFACE_ICONS = {
             "asphalt": "🛣", "paved": "🛣", "concrete": "🛣", "sett": "🛣",
             "gravel": "🪨", "fine_gravel": "🪨", "compacted": "🪨",
-            "ground": "🌱", "dirt": "🌱", "grass": "🌿",
+            "ground": "🌱", "dirt": "🌱", "unpaved": "🌱", "grass": "🌿",
             "sand": "🏖", "mud": "💧", "rock": "⛰", "error": "⚠️",
         }
 
