@@ -301,6 +301,7 @@ SURFACE_SOIL_MODIFIERS = {
     "compacted":    {"capacity_mult": 0.65, "desorptivity_mult": 1.4},
     "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
     "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
+    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
     "grass":        {"capacity_mult": 1.15, "desorptivity_mult": 0.85},
     "sand":         {"capacity_mult": 0.80, "desorptivity_mult": 1.3},
     "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65},
