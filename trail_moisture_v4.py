@@ -308,11 +308,16 @@ def fetch_surface_type(lat: float, lon: float) -> str:
     Тип покрытия OSM для точки (radius=30м, только трейловые highway).
     Возвращает OSM surface tag или 'ground' при ошибке/отсутствии данных.
     """
+    # OSM highway types that are implicitly paved even without a surface tag
+    PAVED_HIGHWAY_TYPES = {
+        "motorway", "trunk", "primary", "secondary", "tertiary",
+        "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+        "residential", "living_street", "service", "road",
+    }
     query = (
         f"[out:json][timeout:10];"
         f"way(around:30,{lat},{lon})"
-        f"[highway~'^(path|track|footway|cycleway|bridleway|unclassified)$']"
-        f"[surface];"
+        f"[highway];"
         f"out tags;"
     )
     try:
@@ -324,8 +329,18 @@ def fetch_surface_type(lat: float, lon: float) -> str:
         if resp.status_code != 200:
             return "ground"
         elements = resp.json().get("elements", [])
-        surfaces = [el["tags"]["surface"] for el in elements if "surface" in el.get("tags", {})]
-        return surfaces[0] if surfaces else "ground"
+        if not elements:
+            return "ground"
+        # Prefer explicit surface tag
+        for el in elements:
+            tags = el.get("tags", {})
+            if "surface" in tags:
+                return tags["surface"]
+        # Fallback: paved highway type → treat as asphalt
+        for el in elements:
+            if el.get("tags", {}).get("highway") in PAVED_HIGHWAY_TYPES:
+                return "asphalt"
+        return "ground"
     except Exception:
         return "ground"
 
