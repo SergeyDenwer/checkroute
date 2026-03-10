@@ -465,10 +465,17 @@ class BatchCardRenderer:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    SCALE = 2   # render at 2× for crisp display
+
     def render(self, data: BatchCardData) -> bytes:
         total_h = self._total_height(len(data.routes))
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.WIDTH, total_h)
+        surface = cairo.ImageSurface(
+            cairo.FORMAT_ARGB32,
+            self.WIDTH  * self.SCALE,
+            total_h * self.SCALE,
+        )
         ctx = cairo.Context(surface)
+        ctx.scale(self.SCALE, self.SCALE)
 
         ctx.set_source_rgb(*self.BG)
         ctx.paint()
@@ -520,7 +527,7 @@ class BatchCardRenderer:
         counts = data.counts
         pill_info = [
             (4, "МОЖНО"),
-            (3, "СКОРЕЕ"),
+            (3, "ВЕРОЯТНО"),
             (2, "ОСТОРОЖНО"),
             (1, "НЕЛЬЗЯ"),
         ]
