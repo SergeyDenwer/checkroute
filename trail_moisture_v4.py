@@ -9,10 +9,13 @@ Trail Moisture Index Calculator v4
   python trail_moisture_v4.py --gpx trail.gpx --sample-km 3
 """
 
+import logging
 import requests
 from datetime import datetime, timedelta
 import argparse
 import math
+
+logger = logging.getLogger(__name__)
 import gpxpy
 from collections import defaultdict
 
@@ -327,21 +330,32 @@ def fetch_surface_type(lat: float, lon: float) -> str:
             timeout=12,
         )
         if resp.status_code != 200:
+            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f)", resp.status_code, lat, lon)
             return "ground"
         elements = resp.json().get("elements", [])
         if not elements:
+            logger.debug("surface_type no ways at (%.5f, %.5f) → ground", lat, lon)
             return "ground"
+        highways = [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements]
+        logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon, highways)
         # Prefer explicit surface tag
         for el in elements:
             tags = el.get("tags", {})
             if "surface" in tags:
-                return tags["surface"]
+                result = tags["surface"]
+                logger.info("surface_type (%.5f, %.5f) surface_tag=%s → %s", lat, lon, result, result)
+                return result
         # Fallback: paved highway type → treat as asphalt
         for el in elements:
-            if el.get("tags", {}).get("highway") in PAVED_HIGHWAY_TYPES:
+            hw = el.get("tags", {}).get("highway")
+            if hw in PAVED_HIGHWAY_TYPES:
+                logger.info("surface_type (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
                 return "asphalt"
+        hw_types = [el.get("tags", {}).get("highway") for el in elements]
+        logger.info("surface_type (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
         return "ground"
-    except Exception:
+    except Exception as e:
+        logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
         return "ground"
 
 
