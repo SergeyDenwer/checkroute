@@ -52,11 +52,15 @@ DEFAULT_SOIL = "loam"
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes_test")
 
 VERDICT_LABELS = {
+    0: "ДОЖДЬ",
     1: "НЕЛЬЗЯ",
     2: "СКОРЕЕ НЕЛЬЗЯ",
     3: "СКОРЕЕ МОЖНО",
     4: "МОЖНО",
 }
+
+# Порог осадков для статуса ДОЖДЬ в прогнозе (мм, среднее по точкам маршрута)
+RAIN_DAY_MM = float(os.getenv("RAIN_DAY_MM", "3"))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,29 +72,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Как использовать:</b>\n"
         "Просто отправь GPX файл\n\n"
         "<b>Команды:</b>\n"
-        "/soil — выбрать тип почвы\n"
         "/batch — сводка по всем маршрутам\n"
-        "/help — справка\n\n"
-        f"Тип почвы: <b>{SOIL_PARAMS_TABLE[DEFAULT_SOIL]['name']}</b>",
+        "/help — справка",
         parse_mode='HTML'
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
-    soil_list = "\n".join([f"  <code>{k}</code> — {v['name']}" for k, v in SOIL_PARAMS_TABLE.items()])
-
     await update.message.reply_text(
         "🛤 <b>CheckRoute — Справка</b>\n\n"
         "<b>Как использовать:</b>\n"
         "Отправь GPX файл → получи отчёт\n"
-        "/batch — сводка по популярным маршрутам "
+        "/batch — сводка по всем маршрутам "
         "(сейчас · завтра · суббота)\n\n"
-        "<b>Типы почвы:</b>\n"
-        f"{soil_list}\n\n"
-        "<b>Выбрать почву:</b>\n"
-        "<code>/soil chernozem</code>\n\n"
-        "<b>Статусы:</b>\n"
+        "<b>Статусы трека:</b>\n"
         "☀️ СУХО — отлично\n"
         "🟠 ВЛАЖНО — скользко\n"
         "🔴 ГРЯЗЬ — грязно\n"
@@ -99,32 +95,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ МОЖНО\n"
         "🟢 СКОРЕЕ МОЖНО\n"
         "🟠 СКОРЕЕ НЕЛЬЗЯ\n"
-        "🔴 НЕЛЬЗЯ",
+        "🔴 НЕЛЬЗЯ\n"
+        "🌧 ДОЖДЬ — в прогнозе осадки",
         parse_mode='HTML'
     )
 
-
-async def soil_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /soil — выбор типа почвы"""
-    if context.args and context.args[0] in SOIL_PARAMS_TABLE:
-        soil_type = context.args[0]
-        context.user_data['soil'] = soil_type
-        params = SOIL_PARAMS_TABLE[soil_type]
-        await update.message.reply_text(
-            f"✅ Тип почвы изменён на: <b>{params['name']}</b>\n"
-            f"Desorptivity: {params['desorptivity']} мм/√день\n"
-            f"Ёмкость: {params['capacity']} мм",
-            parse_mode='HTML'
-        )
-    else:
-        soil_list = ", ".join([f"<code>{k}</code>" for k in SOIL_PARAMS_TABLE.keys()])
-        current = context.user_data.get('soil', DEFAULT_SOIL)
-        await update.message.reply_text(
-            f"Текущий тип почвы: <b>{SOIL_PARAMS_TABLE[current]['name']}</b>\n\n"
-            f"Доступные типы:\n{soil_list}\n\n"
-            f"Пример: <code>/soil chernozem</code>",
-            parse_mode='HTML'
-        )
 
 
 async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -241,13 +216,16 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
-            ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
-            _, level = verdict_from_ci(ds_ci)
+            if ds.get("avg_rain", 0) >= RAIN_DAY_MM:
+                level = 0  # ДОЖДЬ — симуляция на этот день бессмысленна
+            else:
+                ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+                _, level = verdict_from_ci(ds_ci)
             if level not in seen_levels:
                 transitions.append((ds["date"], level))
                 seen_levels.add(level)
 
-        transitions.sort(key=lambda x: x[1])  # worst first (level 1 → 4)
+        transitions.sort(key=lambda x: x[1])  # worst first (0=дождь, 1=нельзя … 4=можно)
 
         for date_str, level in transitions:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -507,7 +485,6 @@ def main():
     # Регистрируем обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("soil", soil_command))
     app.add_handler(CommandHandler("batch", batch_command))
     app.add_handler(CallbackQueryHandler(route_detail_callback, pattern="^r:"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_gpx))

@@ -492,12 +492,14 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
         mud_count = 0
         swamp_count = 0
         total_moisture = 0
-        
+        total_rain = 0
+
         for f in all_forecasts:
             if day_idx < len(f["forecast"]):
                 m = f["forecast"][day_idx]["moisture"]
                 c = f["forecast"][day_idx]["capacity"]
                 total_moisture += m
+                total_rain += f["forecast"][day_idx].get("rain", 0)
 
                 _, status_key = get_status(m, c)
                 if status_key == "dry":
@@ -508,11 +510,12 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
                     mud_count += 1
                 else:
                     swamp_count += 1
-        
+
         n = len(all_forecasts)
         daily_stats.append({
             "date": date,
             "avg_moisture": total_moisture / n,
+            "avg_rain": total_rain / n,
             "dry_pct": dry_count / n * 100,
             "wet_pct": wet_count / n * 100,
             "mud_pct": mud_count / n * 100,
