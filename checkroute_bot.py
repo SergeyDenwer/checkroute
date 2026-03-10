@@ -9,6 +9,7 @@ CheckRoute — Telegram бот для проверки состояния мар
   3. python trail_bot.py
 """
 
+import asyncio
 import json
 import os
 import logging
@@ -166,49 +167,82 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
     soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
 
+    header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
+    total = len(sampled)
     await message.edit_text(
-        f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
-        f"🔬 Анализирую {len(sampled)} контрольных точек..."
+        header + f"🔬 Анализирую {total} контрольных точек...\n⏳ 0/{total}"
     )
+
+    # Иконки поверхностей для живого лога
+    _SURFACE_ICONS = {
+        "asphalt": "🛣", "paved": "🛣", "concrete": "🛣",
+        "gravel": "🪨", "fine_gravel": "🪨", "compacted": "🪨",
+        "ground": "🌱", "dirt": "🌱", "grass": "🌿",
+        "sand": "🏖", "mud": "💧", "rock": "⛰",
+    }
+
+    def _surface_icon(s: str) -> str:
+        return _SURFACE_ICONS.get(s, "❓")
 
     results = []
     errors = 0
     skipped_paved = 0
+    progress_lines: list[str] = []
+
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
-            surface = fetch_surface_type(lat, lon)
+            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
             if surface == "error":
                 skipped_paved += 1
-                continue  # OSM недоступен — не анализируем
-            if surface in PAVED_SURFACES:
-                # Пробуем точку +1 км по треку
+                progress_lines.append(f"  км {dist_km:.1f} — ⚠️ нет данных OSM")
+            elif surface in PAVED_SURFACES:
                 shifted = get_point_at_distance(points, dist_km + 1.0)
                 if shifted is None:
                     skipped_paved += 1
-                    continue  # конец трека — пропускаем
-                lat, lon, elev, dist_km = shifted
-                surface = fetch_surface_type(lat, lon)
-                if surface in (PAVED_SURFACES | {"error"}):
-                    skipped_paved += 1
-                    continue  # снова асфальт или ошибка — пропускаем
-            weather = fetch_weather_data(lat, lon, days_back=14)
-            point_soil = apply_surface_modifiers(soil_params, surface)
-            state = simulate_moisture(weather, point_soil)
-            status_label, status_key = get_status(state["moisture"], state["capacity"])
-            results.append({
-                "lat": lat, "lon": lon, "elevation": elev,
-                "distance_km": dist_km,
-                "moisture": state["moisture"],
-                "capacity": state["capacity"],
-                "wet_index": state["wet_index"],
-                "snow_cover": state["snow_cover"],
-                "surface": surface,
-                "status_label": status_label,
-                "status_key": status_key,
-            })
+                    progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
+                else:
+                    lat, lon, elev, dist_km = shifted
+                    surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
+                    if surface in (PAVED_SURFACES | {"error"}):
+                        skipped_paved += 1
+                        progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
+                    else:
+                        # упадёт в общий блок ниже через флаг
+                        pass
+            if surface not in PAVED_SURFACES and surface != "error":
+                weather = fetch_weather_data(lat, lon, days_back=14)
+                point_soil = apply_surface_modifiers(soil_params, surface)
+                state = simulate_moisture(weather, point_soil)
+                status_label, status_key = get_status(state["moisture"], state["capacity"])
+                results.append({
+                    "lat": lat, "lon": lon, "elevation": elev,
+                    "distance_km": dist_km,
+                    "moisture": state["moisture"],
+                    "capacity": state["capacity"],
+                    "wet_index": state["wet_index"],
+                    "snow_cover": state["snow_cover"],
+                    "surface": surface,
+                    "status_label": status_label,
+                    "status_key": status_key,
+                })
+                progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} → {status_label}")
         except Exception as e:
             errors += 1
             logger.warning(f"Point {idx} error: {e}")
+            progress_lines.append(f"  км {dist_km:.1f} — ❌ ошибка")
+
+        done = idx + 1
+        bar = "▓" * done + "░" * (total - done)
+        log_tail = "\n".join(progress_lines[-5:])  # последние 5 строк чтобы не вылезти за лимит
+        try:
+            await message.edit_text(
+                header
+                + f"🔬 Анализирую точку {done}/{total}\n"
+                + f"[{bar}]\n"
+                + log_tail
+            )
+        except Exception:
+            pass  # TelegramError (flood/not modified) — не критично
 
     if not results:
         return None, "❌ Не удалось получить данные погоды ни для одной точки"
