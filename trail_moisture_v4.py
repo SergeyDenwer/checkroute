@@ -370,15 +370,28 @@ def fetch_surface_type(lat: float, lon: float) -> str:
     if not _overpass_wait_for_slot():
         logger.warning("surface_type: Overpass no slot available at (%.5f, %.5f) → error", lat, lon)
         return "error"
-    try:
-        resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+    for attempt in range(3):
+        try:
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+        except Exception as e:
+            logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
+            return "error"
+
         if resp.status_code == 429:
             # Слот пропал между проверкой и запросом — ждём и делаем ещё одну попытку
             logger.warning("surface_type: unexpected 429 at (%.5f, %.5f), waiting for slot...", lat, lon)
-            if _overpass_wait_for_slot():
-                resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
-            else:
+            if not _overpass_wait_for_slot():
                 return "error"
+            continue  # повтор с тем же слотом
+
+        if resp.status_code in (503, 504):
+            # Сервер перегружен — короткая пауза и повтор
+            wait = 5 * (attempt + 1)
+            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f), retry in %ds (attempt %d/3)",
+                           resp.status_code, lat, lon, wait, attempt + 1)
+            time.sleep(wait)
+            continue
+
         if resp.status_code != 200:
             logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f) → error", resp.status_code, lat, lon)
             return "error"
@@ -401,9 +414,8 @@ def fetch_surface_type(lat: float, lon: float) -> str:
         hw_types = [el.get("tags", {}).get("highway") for el in elements]
         logger.info("surface_type (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
         return "ground"
-    except Exception as e:
-        logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
-        return "error"
+    logger.warning("surface_type all retries failed at (%.5f, %.5f) → error", lat, lon)
+    return "error"
 
 
 def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
