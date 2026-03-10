@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Дефолтные настройки
 DEFAULT_SAMPLE_KM = 5.0
 DEFAULT_SOIL = "loam"
-ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes_test")
+ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
 VERDICT_LABELS = {
     1: "НЕЛЬЗЯ",
