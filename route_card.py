@@ -120,6 +120,8 @@ class RouteCardRenderer:
         (0.976, 0.451, 0.086),   # #F97316  orange
         (0.937, 0.267, 0.267),   # #EF4444  red
     )
+    # Level 0 — rain forecast: Tailwind blue-400
+    _RAIN_COLOR: Color = (0.243, 0.631, 0.957)  # #3EA1F4
 
     @property
     def _STATUS_ROWS(self):
@@ -134,7 +136,7 @@ class RouteCardRenderer:
     @property
     def VERDICT_COLOR(self):
         p = self._P
-        return {4: p[0], 3: p[1], 2: p[2], 1: p[3]}
+        return {4: p[0], 3: p[1], 2: p[2], 1: p[3], 0: self._RAIN_COLOR}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -472,7 +474,9 @@ class BatchCardRenderer:
     # ── Colour helpers ────────────────────────────────────────────────────────
 
     def _level_color(self, level: int) -> Color:
-        """level 4 = best (green) … level 1 = worst (red)."""
+        """level 4 = best (green) … level 1 = worst (red), level 0 = rain (blue)."""
+        if level == 0:
+            return self._RAIN_COLOR
         return self._P[4 - level]
 
     def _dry_color(self, pct: float) -> Color:
