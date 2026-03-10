@@ -29,6 +29,8 @@ from trail_moisture_v4 import (
     sample_points_by_distance,
     get_soil_params,
     fetch_weather_data,
+    fetch_surface_type,
+    apply_surface_modifiers,
     simulate_moisture,
     get_status,
     aggregate_status,
@@ -198,7 +200,9 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
             weather = fetch_weather_data(lat, lon, days_back=14)
-            state = simulate_moisture(weather, soil_params)
+            surface = fetch_surface_type(lat, lon)
+            point_soil = apply_surface_modifiers(soil_params, surface)
+            state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
@@ -207,6 +211,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                 "capacity": state["capacity"],
                 "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
+                "surface": surface,
                 "status_label": status_label,
                 "status_key": status_key,
             })
@@ -287,7 +292,9 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     for lat, lon, elev, dist_km in sampled:
         try:
             weather = fetch_weather_data(lat, lon, days_back=14)
-            state = simulate_moisture(weather, soil_params)
+            surface = fetch_surface_type(lat, lon)
+            point_soil = apply_surface_modifiers(soil_params, surface)
+            state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
@@ -296,6 +303,7 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
                 "capacity": state["capacity"],
                 "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
+                "surface": surface,
                 "status_label": status_label,
                 "status_key": status_key,
             })

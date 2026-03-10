@@ -16,8 +16,6 @@ import math
 import gpxpy
 from collections import defaultdict
 
-# Порог дождя для сброса счётчика дней
-RAIN_THRESHOLD = 3.0  # мм
 
 SOIL_PARAMS_TABLE = {
     "sand": {"name": "Песок (sand)", "desorptivity": 4.5, "capacity": 10.0, "stage1_ratio": 0.5},
@@ -269,45 +267,62 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
     return results
 
 
-def fetch_route_surface(points: list) -> str:
-    """
-    Определяет преобладающий тип покрытия вдоль маршрута через OSM Overpass.
-    Выборка ~5 точек равномерно по треку, радиус 30 м, только трейловые типы дорог.
-    Возвращает OSM surface tag или 'ground' если не найдено/ошибка.
-    """
-    if not points:
-        return "ground"
+# Как OSM surface влияет на физику симуляции:
+# capacity_mult  — насколько точка держит воду (гравий дренирует, глина держит)
+# desorptivity_mult — насколько быстро сохнет в Stage 2
+SURFACE_SOIL_MODIFIERS = {
+    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
+    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
+    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
+    "gravel":       {"capacity_mult": 0.55, "desorptivity_mult": 1.6},
+    "fine_gravel":  {"capacity_mult": 0.60, "desorptivity_mult": 1.5},
+    "compacted":    {"capacity_mult": 0.65, "desorptivity_mult": 1.4},
+    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
+    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
+    "grass":        {"capacity_mult": 1.15, "desorptivity_mult": 0.85},
+    "sand":         {"capacity_mult": 0.80, "desorptivity_mult": 1.3},
+    "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65},
+}
 
-    # Равномерная выборка до 5 точек
-    step = max(1, len(points) // 5)
-    sample = points[::step][:5]
 
-    # Запрашиваем по одному union вокруг выборки
-    around_parts = " ".join(
-        f"way(around:30,{lat},{lon})[highway~'^(path|track|footway|cycleway|bridleway|unclassified)$'][surface];"
-        for lat, lon, *_ in sample
+def fetch_surface_type(lat: float, lon: float) -> str:
+    """
+    Тип покрытия OSM для точки (radius=30м, только трейловые highway).
+    Возвращает OSM surface tag или 'ground' при ошибке/отсутствии данных.
+    """
+    query = (
+        f"[out:json][timeout:10];"
+        f"way(around:30,{lat},{lon})"
+        f"[highway~'^(path|track|footway|cycleway|bridleway|unclassified)$']"
+        f"[surface];"
+        f"out tags;"
     )
-    query = f"[out:json][timeout:15];({around_parts});out tags;"
-
     try:
         resp = requests.post(
             "https://overpass-api.de/api/interpreter",
             data={"data": query},
-            timeout=18,
+            timeout=12,
         )
         if resp.status_code != 200:
             return "ground"
         elements = resp.json().get("elements", [])
-        surfaces = [
-            el["tags"]["surface"]
-            for el in elements
-            if "surface" in el.get("tags", {})
-        ]
-        if not surfaces:
-            return "ground"
-        return max(set(surfaces), key=surfaces.count)
+        surfaces = [el["tags"]["surface"] for el in elements if "surface" in el.get("tags", {})]
+        return surfaces[0] if surfaces else "ground"
     except Exception:
         return "ground"
+
+
+def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
+    """
+    Возвращает копию soil_params, скорректированную под тип покрытия.
+    SOIL (геология) остаётся базой, surface (конструкция тропы) уточняет физику.
+    """
+    mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0})
+    return {
+        **soil_params,
+        "capacity":     soil_params["capacity"]     * mods["capacity_mult"],
+        "desorptivity": soil_params["desorptivity"] * mods["desorptivity_mult"],
+    }
 
 
 def get_status(moisture, capacity):
