@@ -271,25 +271,24 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 
 def fetch_route_surface(points: list) -> str:
     """
-    Определяет преобладающий тип покрытия для маршрута через OSM Overpass API.
-    Один запрос по bounding box всего трека.
+    Определяет преобладающий тип покрытия вдоль маршрута через OSM Overpass.
+    Выборка ~5 точек равномерно по треку, радиус 30 м, только трейловые типы дорог.
     Возвращает OSM surface tag или 'ground' если не найдено/ошибка.
     """
     if not points:
         return "ground"
 
-    lats = [p[0] for p in points]
-    lons = [p[1] for p in points]
-    south = min(lats) - 0.001
-    north = max(lats) + 0.001
-    west  = min(lons) - 0.001
-    east  = max(lons) + 0.001
+    # Равномерная выборка до 5 точек
+    step = max(1, len(points) // 5)
+    sample = points[::step][:5]
 
-    query = (
-        f"[out:json][timeout:15];"
-        f"way({south},{west},{north},{east})[highway][surface];"
-        f"out tags;"
+    # Запрашиваем по одному union вокруг выборки
+    around_parts = " ".join(
+        f"way(around:30,{lat},{lon})[highway~'^(path|track|footway|cycleway|bridleway|unclassified)$'][surface];"
+        for lat, lon, *_ in sample
     )
+    query = f"[out:json][timeout:15];({around_parts});out tags;"
+
     try:
         resp = requests.post(
             "https://overpass-api.de/api/interpreter",
