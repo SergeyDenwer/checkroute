@@ -9,6 +9,7 @@ CheckRoute — Telegram бот для проверки состояния мар
   3. python trail_bot.py
 """
 
+import json
 import os
 import logging
 import tempfile
@@ -410,18 +411,26 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Inline-кнопки для перехода к детальному анализу маршрута
     verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
+
+    # Загружаем Komoot-ссылки если есть
+    komoot_urls: dict = {}
+    routes_json = os.path.join(ROUTES_DIR, "routes.json")
+    if os.path.isfile(routes_json):
+        try:
+            with open(routes_json, encoding="utf-8") as _f:
+                komoot_urls = json.load(_f)
+        except Exception:
+            pass
+
     kbd_buttons = []
-    row_buf = []
     for r in route_results:
-        e = verdict_emoji.get(r["today_level"], "❓")
-        label = f"{e} {r['name'][:18]}"
-        # callback_data ограничен 64 байтами; префикс "r:" + имя файла
-        row_buf.append(InlineKeyboardButton(label, callback_data=f"r:{r['gpx_file'][:61]}"))
-        if len(row_buf) == 2:
-            kbd_buttons.append(row_buf)
-            row_buf = []
-    if row_buf:
-        kbd_buttons.append(row_buf)
+        e     = verdict_emoji.get(r["today_level"], "❓")
+        label = f"{e} {r['name'][:22]}"
+        row   = [InlineKeyboardButton(label, callback_data=f"r:{r['gpx_file'][:61]}")]
+        url   = komoot_urls.get(r["gpx_file"], "")
+        if url:
+            row.append(InlineKeyboardButton("🌐", url=url))
+        kbd_buttons.append(row)
 
     reply_markup = InlineKeyboardMarkup(kbd_buttons)
 
