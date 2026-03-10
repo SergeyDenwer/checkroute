@@ -309,28 +309,39 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     return card_data, None
 
 
-def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
-    """Анализ одного маршрута для сводки. Возвращает dict или None."""
+async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_progress=None):
+    """Анализ одного маршрута для сводки. Возвращает dict или None.
+    on_progress(done, total, dist_km, surface, status_label) вызывается после каждой точки.
+    """
     points = parse_gpx(gpx_path)
     if not points:
         return None
 
     sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
+    total = len(sampled)
 
     # Текущее состояние по каждой точке
     results = []
-    for lat, lon, elev, dist_km in sampled:
+    for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
+        surface = None
+        status_label = None
         try:
-            surface = fetch_surface_type(lat, lon)
+            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
             if surface == "error":
+                if on_progress:
+                    await on_progress(idx + 1, total, dist_km, "error", None)
                 continue
             if surface in PAVED_SURFACES:
                 shifted = get_point_at_distance(points, dist_km + 1.0)
                 if shifted is None:
+                    if on_progress:
+                        await on_progress(idx + 1, total, dist_km, surface, None)
                     continue
                 lat, lon, elev, dist_km = shifted
-                surface = fetch_surface_type(lat, lon)
+                surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
                 if surface in (PAVED_SURFACES | {"error"}):
+                    if on_progress:
+                        await on_progress(idx + 1, total, dist_km, surface, None)
                     continue
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
@@ -349,6 +360,8 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
             })
         except Exception:
             pass
+        if on_progress:
+            await on_progress(idx + 1, total, dist_km, surface, status_label)
 
     if not results:
         return None
@@ -421,27 +434,72 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     route_results = []
+    done_lines: list[str] = []
+    total_files = len(gpx_files)
 
     for file_idx, gpx_file in enumerate(gpx_files):
         route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
         gpx_path = os.path.join(ROUTES_DIR, gpx_file)
 
+        bar = "▓" * (file_idx) + "░" * (total_files - file_idx)
+        log_tail = "\n".join(done_lines[-6:])
         try:
             await status_msg.edit_text(
-                f"📊 Анализирую ({file_idx + 1}/{len(gpx_files)})...\n"
-                f"🔍 {route_name}"
+                f"📊 Анализирую ({file_idx + 1}/{total_files})\n"
+                f"[{bar}]\n"
+                f"🔍 {route_name}...\n"
+                + (("\n" + log_tail) if log_tail else "")
             )
         except Exception:
             pass
 
+        _SURFACE_ICONS = {
+            "asphalt": "🛣", "paved": "🛣", "concrete": "🛣", "sett": "🛣",
+            "gravel": "🪨", "fine_gravel": "🪨", "compacted": "🪨",
+            "ground": "🌱", "dirt": "🌱", "grass": "🌿",
+            "sand": "🏖", "mud": "💧", "rock": "⛰", "error": "⚠️",
+        }
+
+        point_lines: list[str] = []
+
+        async def on_point_progress(done, total_pts, dist_km, surface, status_label):
+            icon = _SURFACE_ICONS.get(surface or "", "❓")
+            if surface in PAVED_SURFACES:
+                line = f"    км {dist_km:.1f} — {icon} {surface} (пропущено)"
+            elif surface == "error" or surface is None:
+                line = f"    км {dist_km:.1f} — ⚠️ нет данных"
+            else:
+                line = f"    км {dist_km:.1f} — {icon} {surface} → {status_label}"
+            point_lines.append(line)
+            pt_bar = "▓" * done + "░" * (total_pts - done)
+            tail = "\n".join(point_lines[-4:])
+            try:
+                await status_msg.edit_text(
+                    f"📊 Анализирую ({file_idx + 1}/{total_files})\n"
+                    f"[{bar}]\n"
+                    f"🔍 {route_name} — точка {done}/{total_pts}\n"
+                    f"  [{pt_bar}]\n"
+                    + tail
+                    + (("\n\n" + "\n".join(done_lines[-3:])) if done_lines else "")
+                )
+            except Exception:
+                pass
+
         try:
-            result = analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday)
+            result = await analyze_route_for_batch(
+                gpx_path, soil_params, tomorrow, saturday, on_progress=on_point_progress
+            )
             if result:
                 result["name"] = route_name
                 result["gpx_file"] = gpx_file
                 route_results.append(result)
+                verdict_text, _ = verdict_from_ci(result["today_ci"])
+                done_lines.append(f"  {route_name} — {verdict_text}")
+            else:
+                done_lines.append(f"  {route_name} — ⚠️ нет данных")
         except Exception as e:
             logger.error(f"Batch error for {gpx_file}: {e}")
+            done_lines.append(f"  {route_name} — ❌ ошибка")
 
     if not route_results:
         await status_msg.edit_text("❌ Не удалось проанализировать ни одного маршрута")
