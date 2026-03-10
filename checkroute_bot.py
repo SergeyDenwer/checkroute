@@ -421,27 +421,40 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     route_results = []
+    done_lines: list[str] = []
+    total_files = len(gpx_files)
 
     for file_idx, gpx_file in enumerate(gpx_files):
         route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
         gpx_path = os.path.join(ROUTES_DIR, gpx_file)
 
+        bar = "▓" * (file_idx) + "░" * (total_files - file_idx)
+        log_tail = "\n".join(done_lines[-6:])
         try:
             await status_msg.edit_text(
-                f"📊 Анализирую ({file_idx + 1}/{len(gpx_files)})...\n"
-                f"🔍 {route_name}"
+                f"📊 Анализирую ({file_idx + 1}/{total_files})\n"
+                f"[{bar}]\n"
+                f"🔍 {route_name}...\n"
+                + (("\n" + log_tail) if log_tail else "")
             )
         except Exception:
             pass
 
         try:
-            result = analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday)
+            result = await asyncio.to_thread(
+                analyze_route_for_batch, gpx_path, soil_params, tomorrow, saturday
+            )
             if result:
                 result["name"] = route_name
                 result["gpx_file"] = gpx_file
                 route_results.append(result)
+                verdict_text, _ = verdict_from_ci(result["today_ci"])
+                done_lines.append(f"  {route_name} — {verdict_text}")
+            else:
+                done_lines.append(f"  {route_name} — ⚠️ нет данных")
         except Exception as e:
             logger.error(f"Batch error for {gpx_file}: {e}")
+            done_lines.append(f"  {route_name} — ❌ ошибка")
 
     if not route_results:
         await status_msg.edit_text("❌ Не удалось проанализировать ни одного маршрута")
