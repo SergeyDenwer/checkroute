@@ -66,6 +66,8 @@ class RouteCardData:
     mud_pct:         float = 0.0
     swamp_pct:       float = 0.0
     forecast_rows:   List[ForecastRow] = field(default_factory=list)
+    points_sampled:  int   = 0     # total sampled checkpoints
+    points_analyzed: int   = 0     # after skipping paved ones
 
 
 def compute_condition_index(
@@ -190,7 +192,8 @@ class RouteCardRenderer:
         self._text(ctx, data.route_name,
                    cx, y0 + 52, size=30, bold=True, align='center')
 
-        subtitle = f"{data.length_km:.1f} km  ·  {data.soil_name}"
+        pts = f"{data.points_analyzed} из {data.points_sampled} точек" if data.points_sampled else ""
+        subtitle = f"{data.length_km:.1f} km  ·  {data.soil_name}" + (f"  ·  {pts}" if pts else "")
         self._text(ctx, subtitle,
                    cx, y0 + 82, size=18, align='center', color=self.GRAY)
 
