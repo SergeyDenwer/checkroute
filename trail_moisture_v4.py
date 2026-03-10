@@ -10,6 +10,7 @@ Trail Moisture Index Calculator v4
 """
 
 import logging
+import time
 import requests
 from datetime import datetime, timedelta
 import argparse
@@ -306,49 +307,95 @@ SURFACE_SOIL_MODIFIERS = {
 }
 
 
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_STATUS_URL = "https://overpass-api.de/api/status"
+
+# OSM highway types that are implicitly paved even without a surface tag
+_PAVED_HIGHWAY_TYPES = {
+    "motorway", "trunk", "primary", "secondary", "tertiary",
+    "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+    "residential", "living_street", "service", "road",
+}
+
+
+def _overpass_wait_for_slot(timeout: int = 60) -> bool:
+    """
+    Проверяет статус Overpass API и ждёт освобождения слота.
+    Возвращает True если слот доступен, False если timeout истёк.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = requests.get(OVERPASS_STATUS_URL, timeout=5)
+            if resp.status_code != 200:
+                time.sleep(2)
+                continue
+            # Парсим строку вида "2 slots available now." или "Slot available after: 2026-03-10T..."
+            text = resp.text
+            if "available now" in text:
+                return True
+            # Ищем время следующего слота
+            import re
+            m = re.search(r"Slot available after: (\S+)", text)
+            if m:
+                try:
+                    slot_time = datetime.fromisoformat(m.group(1).rstrip("Z"))
+                    wait = max(0, (slot_time - datetime.utcnow()).total_seconds()) + 1
+                    logger.info("Overpass: slot available in %.0fs, waiting...", wait)
+                    time.sleep(min(wait, deadline - time.time()))
+                    continue
+                except ValueError:
+                    pass
+            # Если не распарсили — ждём немного и пробуем снова
+            time.sleep(3)
+        except Exception as e:
+            logger.warning("Overpass status check failed: %s", e)
+            time.sleep(3)
+    return False
+
+
 def fetch_surface_type(lat: float, lon: float) -> str:
     """
-    Тип покрытия OSM для точки (radius=30м, только трейловые highway).
-    Возвращает OSM surface tag или 'ground' при ошибке/отсутствии данных.
+    Тип покрытия OSM для точки.
+    Возвращает OSM surface tag, 'asphalt' для дорожных highway без surface тега,
+    'ground' если данных нет, 'error' если Overpass недоступен.
     """
-    # OSM highway types that are implicitly paved even without a surface tag
-    PAVED_HIGHWAY_TYPES = {
-        "motorway", "trunk", "primary", "secondary", "tertiary",
-        "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
-        "residential", "living_street", "service", "road",
-    }
     query = (
         f"[out:json][timeout:10];"
         f"way(around:30,{lat},{lon})"
         f"[highway];"
         f"out tags;"
     )
+    # Ждём доступного слота перед запросом
+    if not _overpass_wait_for_slot():
+        logger.warning("surface_type: Overpass no slot available at (%.5f, %.5f) → error", lat, lon)
+        return "error"
     try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data={"data": query},
-            timeout=12,
-        )
+        resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+        if resp.status_code == 429:
+            # Слот пропал между проверкой и запросом — ждём и делаем ещё одну попытку
+            logger.warning("surface_type: unexpected 429 at (%.5f, %.5f), waiting for slot...", lat, lon)
+            if _overpass_wait_for_slot():
+                resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+            else:
+                return "error"
         if resp.status_code != 200:
-            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f)", resp.status_code, lat, lon)
-            return "ground"
+            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f) → error", resp.status_code, lat, lon)
+            return "error"
         elements = resp.json().get("elements", [])
         if not elements:
             logger.debug("surface_type no ways at (%.5f, %.5f) → ground", lat, lon)
             return "ground"
-        highways = [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements]
-        logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon, highways)
-        # Prefer explicit surface tag
+        logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon,
+                     [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements])
         for el in elements:
-            tags = el.get("tags", {})
-            if "surface" in tags:
-                result = tags["surface"]
-                logger.info("surface_type (%.5f, %.5f) surface_tag=%s → %s", lat, lon, result, result)
+            if "surface" in el.get("tags", {}):
+                result = el["tags"]["surface"]
+                logger.info("surface_type (%.5f, %.5f) surface_tag=%s", lat, lon, result)
                 return result
-        # Fallback: paved highway type → treat as asphalt
         for el in elements:
             hw = el.get("tags", {}).get("highway")
-            if hw in PAVED_HIGHWAY_TYPES:
+            if hw in _PAVED_HIGHWAY_TYPES:
                 logger.info("surface_type (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
                 return "asphalt"
         hw_types = [el.get("tags", {}).get("highway") for el in elements]
@@ -356,7 +403,7 @@ def fetch_surface_type(lat: float, lon: float) -> str:
         return "ground"
     except Exception as e:
         logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
-        return "ground"
+        return "error"
 
 
 def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:

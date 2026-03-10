@@ -177,6 +177,9 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
             surface = fetch_surface_type(lat, lon)
+            if surface == "error":
+                skipped_paved += 1
+                continue  # OSM недоступен — не анализируем
             if surface in PAVED_SURFACES:
                 # Пробуем точку +1 км по треку
                 shifted = get_point_at_distance(points, dist_km + 1.0)
@@ -185,9 +188,9 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                     continue  # конец трека — пропускаем
                 lat, lon, elev, dist_km = shifted
                 surface = fetch_surface_type(lat, lon)
-                if surface in PAVED_SURFACES:
+                if surface in (PAVED_SURFACES | {"error"}):
                     skipped_paved += 1
-                    continue  # снова асфальт — пропускаем
+                    continue  # снова асфальт или ошибка — пропускаем
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
             state = simulate_moisture(weather, point_soil)
@@ -285,13 +288,15 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     for lat, lon, elev, dist_km in sampled:
         try:
             surface = fetch_surface_type(lat, lon)
+            if surface == "error":
+                continue
             if surface in PAVED_SURFACES:
                 shifted = get_point_at_distance(points, dist_km + 1.0)
                 if shifted is None:
                     continue
                 lat, lon, elev, dist_km = shifted
                 surface = fetch_surface_type(lat, lon)
-                if surface in PAVED_SURFACES:
+                if surface in (PAVED_SURFACES | {"error"}):
                     continue
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
