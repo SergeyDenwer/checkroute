@@ -106,7 +106,25 @@ def sample_points_by_distance(points, sample_km=5.0):
     return sampled
 
 
-def get_soil_params(soil_type=None):
+# Покрытия, которые не имеют смысла анализировать (грязи там нет)
+PAVED_SURFACES = {"asphalt", "paved", "concrete"}
+
+
+def get_point_at_distance(points, target_dist_km):
+    """
+    Возвращает (lat, lon, elev, cum_dist) — точку трека на расстоянии
+    target_dist_km от начала. None если target_dist_km за пределами трека.
+    """
+    cum = 0.0
+    for i in range(1, len(points)):
+        d = haversine_distance(points[i-1][0], points[i-1][1], points[i][0], points[i][1])
+        cum += d
+        if cum >= target_dist_km:
+            return points[i][0], points[i][1], points[i][2], cum
+    return None
+
+
+
     """Возвращает параметры почвы."""
     if soil_type and soil_type in SOIL_PARAMS_TABLE:
         return SOIL_PARAMS_TABLE[soil_type].copy()
