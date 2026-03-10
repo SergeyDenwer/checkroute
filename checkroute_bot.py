@@ -19,7 +19,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 from route_card import (
     RouteCardRenderer, RouteCardData, ForecastRow,
-    compute_condition_index, SOIL_DISPLAY,
+    compute_condition_index, verdict_from_ci, SOIL_DISPLAY,
     BatchCardRenderer, BatchCardData, BatchRouteRow,
 )
 
@@ -29,9 +29,9 @@ from trail_moisture_v4 import (
     sample_points_by_distance,
     get_soil_params,
     fetch_weather_data,
+    fetch_route_surface,
     simulate_moisture,
     get_status,
-    get_trail_verdict,
     aggregate_status,
     forecast_trail_drying,
     haversine_distance,
@@ -206,7 +206,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                 "distance_km": dist_km,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
-                "days_dry": state["days_dry"],
+                "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
                 "status_label": status_label,
                 "status_key": status_key,
@@ -224,7 +224,9 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     mud_pct   = agg.get("mud",   {}).get("percent", 0)
     swamp_pct = agg.get("swamp", {}).get("percent", 0)
 
-    _, verdict_level = get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct)
+    surface = fetch_route_surface(points)
+    ci = compute_condition_index(dry_pct, wet_pct, mud_pct, swamp_pct)
+    _, verdict_level = verdict_from_ci(ci, surface)
 
     # Строим строки прогноза
     forecast_rows = []
@@ -236,7 +238,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
-            _, level = get_trail_verdict(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            _, level = verdict_from_ci(ds_ci, surface)
             if level not in seen_levels:
                 transitions.append((ds["date"], level))
                 seen_levels.add(level)
@@ -260,7 +263,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         route_name=route_name or "Маршрут",
         length_km=round(total_distance, 1),
         soil_name=SOIL_DISPLAY.get(soil_type, soil_params["name"]),
-        condition_index=compute_condition_index(dry_pct, wet_pct, mud_pct, swamp_pct),
+        condition_index=ci,
         verdict_text=VERDICT_LABELS[verdict_level],
         verdict_level=verdict_level,
         dry_pct=dry_pct,
@@ -293,7 +296,7 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
                 "distance_km": dist_km,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
-                "days_dry": state["days_dry"],
+                "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
                 "status_label": status_label,
                 "status_key": status_key,
@@ -304,34 +307,33 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     if not results:
         return None
 
+    surface = fetch_route_surface(points)
+
     # Агрегация текущего состояния
     agg = aggregate_status(results)
-    today_dry = agg.get("dry", {}).get("percent", 0)
-    today_wet = agg.get("wet", {}).get("percent", 0)
-    today_mud = agg.get("mud", {}).get("percent", 0)
+    today_dry   = agg.get("dry",   {}).get("percent", 0)
+    today_wet   = agg.get("wet",   {}).get("percent", 0)
+    today_mud   = agg.get("mud",   {}).get("percent", 0)
     today_swamp = agg.get("swamp", {}).get("percent", 0)
-    _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
     today_ci = compute_condition_index(today_dry, today_wet, today_mud, today_swamp)
+    _, today_level = verdict_from_ci(today_ci, surface)
 
     # Прогноз — берём меньше точек чтобы не долбить API
-    tomorrow_ci = today_ci
+    tomorrow_ci    = today_ci
     tomorrow_level = today_level
-    saturday_ci = today_ci
+    saturday_ci    = today_ci
     saturday_level = today_level
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
+            ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if ds_date == tomorrow:
-                tomorrow_ci = compute_condition_index(
-                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
-                _, tomorrow_level = get_trail_verdict(
-                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+                tomorrow_ci = ds_ci
+                _, tomorrow_level = verdict_from_ci(ds_ci, surface)
             if ds_date == saturday:
-                saturday_ci = compute_condition_index(
-                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
-                _, saturday_level = get_trail_verdict(
-                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+                saturday_ci = ds_ci
+                _, saturday_level = verdict_from_ci(ds_ci, surface)
 
     return {
         "today_ci": today_ci,
