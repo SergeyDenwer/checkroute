@@ -24,7 +24,7 @@ from __future__ import annotations
 import io
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cairo
 
@@ -371,6 +371,261 @@ class RouteCardRenderer:
               align: str = 'left',
               color: Optional[Color] = None):
         """Draw text with optional alignment and color."""
+        ctx.set_source_rgb(*(color or self.WHITE))
+        weight = cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL
+        ctx.select_font_face("Noto Sans", cairo.FONT_SLANT_NORMAL, weight)
+        ctx.set_font_size(size)
+
+        xb, _, tw, _, _, _ = ctx.text_extents(text)
+        if align == 'center':
+            x -= xb + tw / 2
+        elif align == 'right':
+            x -= xb + tw
+        else:
+            x -= xb
+
+        ctx.move_to(x, y)
+        ctx.show_text(text)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Batch card — multi-route summary
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class BatchRouteRow:
+    name:          str
+    today_dry:     float
+    today_level:   int    # 1 (can't ride) … 4 (can ride)
+    tomorrow_dry:  float
+    saturday_dry:  float
+
+
+@dataclass
+class BatchCardData:
+    soil_name:   str    # e.g. "Суглинок"
+    date_str:    str    # e.g. "10.03.2026"
+    col3_label:  str    # e.g. "Сб 14.03"
+    routes:      List[BatchRouteRow]
+
+    @property
+    def counts(self) -> Dict[int, int]:
+        c: Dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
+        for r in self.routes:
+            c[r.today_level] = c.get(r.today_level, 0) + 1
+        return c
+
+
+class BatchCardRenderer:
+    """
+    Renders a multi-route batch summary card as PNG bytes.
+
+    Layout (540 px wide, dynamic height):
+      ┌──────────────────────────────────────────────┐
+      │  СВОДКА МАРШРУТОВ                            │  header (80)
+      │  Суглинок · 10.03.2026 · 9 маршрутов         │
+      ├──────────────────────────────────────────────┤
+      │  ● 5 МОЖНО  ● 2 СКОРЕЕ  ● 1 ОСТОРОЖНО  ● 0  │  pills  (56)
+      ├────────────────────┬───────┬───────┬─────────┤
+      │ Маршрут            │Сегодня│Завтра │Сб 14.03 │  col headers (36)
+      ├────────────────────┼───────┼───────┼─────────┤
+      │ ● Медведки         │ ████░ │ ███░░ │ ██░░░   │  route row  (44 ea)
+      │ ● Жуков лог        │ █░░░░ │ ██░░░ │ ███░░   │
+      └────────────────────┴───────┴───────┴─────────┘
+    """
+
+    WIDTH   = 540
+    H_PAD   = 20
+    ROW_H   = 44
+
+    BG      : Color = (0.04,  0.04,  0.04)
+    WHITE   : Color = (1.0,   1.0,   1.0)
+    GRAY    : Color = (0.58,  0.58,  0.58)
+    DIVIDER : Color = (0.16,  0.16,  0.16)
+
+    # Same palette as RouteCardRenderer: best(green) → worst(red)
+    _P: tuple = (
+        (0.204, 0.827, 0.600),   # #34D399  green
+        (0.984, 0.749, 0.141),   # #FBBF24  yellow
+        (0.976, 0.451, 0.086),   # #F97316  orange
+        (0.937, 0.267, 0.267),   # #EF4444  red
+    )
+
+    # ── Colour helpers ────────────────────────────────────────────────────────
+
+    def _level_color(self, level: int) -> Color:
+        """level 4 = best (green) … level 1 = worst (red)."""
+        return self._P[4 - level]
+
+    def _dry_color(self, pct: float) -> Color:
+        if pct >= 70: return self._P[0]
+        if pct >= 50: return self._P[1]
+        if pct >= 30: return self._P[2]
+        return self._P[3]
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def render(self, data: BatchCardData) -> bytes:
+        total_h = self._total_height(len(data.routes))
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.WIDTH, total_h)
+        ctx = cairo.Context(surface)
+
+        ctx.set_source_rgb(*self.BG)
+        ctx.paint()
+
+        y = 0
+        y = self._draw_header(ctx, data, y)
+        y = self._draw_pills(ctx, data, y)
+        y = self._draw_col_headers(ctx, data, y)
+        self._draw_rows(ctx, data, y)
+
+        out = io.BytesIO()
+        surface.write_to_png(out)
+        return out.getvalue()
+
+    # ── Height ────────────────────────────────────────────────────────────────
+
+    def _total_height(self, n: int) -> int:
+        return 80 + 56 + 36 + n * self.ROW_H + 24
+
+    # ── Column geometry ───────────────────────────────────────────────────────
+
+    def _col_centers(self) -> List[float]:
+        """X centers for the 3 data columns (Сегодня / Завтра / Суббота)."""
+        name_end  = self.H_PAD + 220
+        right_end = self.WIDTH - self.H_PAD
+        col_w     = (right_end - name_end) / 3
+        return [name_end + col_w * (i + 0.5) for i in range(3)]
+
+    # ── Header ────────────────────────────────────────────────────────────────
+
+    def _draw_header(self, ctx, data: BatchCardData, y0: int) -> int:
+        h  = 80
+        cx = self.WIDTH / 2
+
+        self._text(ctx, "СВОДКА МАРШРУТОВ",
+                   cx, y0 + 42, size=24, bold=True, align='center')
+
+        subtitle = f"{data.soil_name}  ·  {data.date_str}  ·  {len(data.routes)} маршрутов"
+        self._text(ctx, subtitle,
+                   cx, y0 + 66, size=15, align='center', color=self.GRAY)
+
+        self._divider(ctx, y0 + h - 1)
+        return y0 + h
+
+    # ── Pill row (verdict counts) ─────────────────────────────────────────────
+
+    def _draw_pills(self, ctx, data: BatchCardData, y0: int) -> int:
+        h      = 56
+        counts = data.counts
+        pill_info = [
+            (4, "МОЖНО"),
+            (3, "СКОРЕЕ"),
+            (2, "ОСТОРОЖНО"),
+            (1, "НЕЛЬЗЯ"),
+        ]
+        inner_w  = self.WIDTH - self.H_PAD * 2
+        seg_w    = inner_w / 4
+        cy       = y0 + 28
+
+        for i, (level, label) in enumerate(pill_info):
+            color   = self._level_color(level)
+            count   = counts.get(level, 0)
+            seg_cx  = self.H_PAD + seg_w * (i + 0.5)
+
+            # Dot + number horizontally centred together
+            dot_x = seg_cx - 16
+            ctx.set_source_rgb(*color)
+            ctx.arc(dot_x, cy, 7, 0, 2 * math.pi)
+            ctx.fill()
+
+            self._text(ctx, str(count), dot_x + 14, cy + 8, size=20, bold=True)
+
+            # Small label below
+            self._text(ctx, label, seg_cx, cy + 24, size=11,
+                       align='center', color=self.GRAY)
+
+        self._divider(ctx, y0 + h - 1)
+        return y0 + h
+
+    # ── Column headers ────────────────────────────────────────────────────────
+
+    def _draw_col_headers(self, ctx, data: BatchCardData, y0: int) -> int:
+        h      = 36
+        ty     = y0 + h - 9
+        centers = self._col_centers()
+
+        self._text(ctx, "Маршрут",
+                   self.H_PAD + 20, ty, size=13, color=self.GRAY)
+
+        for cx, label in zip(centers, ["Сегодня", "Завтра", data.col3_label]):
+            self._text(ctx, label, cx, ty, size=13, align='center', color=self.GRAY)
+
+        self._divider(ctx, y0 + h - 1)
+        return y0 + h
+
+    # ── Route rows ────────────────────────────────────────────────────────────
+
+    def _draw_rows(self, ctx, data: BatchCardData, y0: int) -> int:
+        centers = self._col_centers()
+        bar_w   = 72
+        bar_h   = 10
+
+        for i, route in enumerate(data.routes):
+            ry    = y0 + i * self.ROW_H
+            mid_y = ry + self.ROW_H / 2
+
+            if i > 0:
+                self._divider(ctx, ry)
+
+            # Verdict dot
+            ctx.set_source_rgb(*self._level_color(route.today_level))
+            ctx.arc(self.H_PAD + 10, mid_y, 6, 0, 2 * math.pi)
+            ctx.fill()
+
+            # Route name
+            name = route.name
+            if len(name) > 22:
+                name = name[:21] + "…"
+            self._text(ctx, name, self.H_PAD + 22, mid_y + 6, size=14, bold=True)
+
+            # Mini bars
+            for cx, pct in zip(centers, [route.today_dry, route.tomorrow_dry, route.saturday_dry]):
+                bx     = cx - bar_w / 2
+                by     = mid_y - bar_h / 2
+                fill_w = max(bar_h, bar_w * pct / 100)
+
+                ctx.set_source_rgb(0.12, 0.12, 0.12)
+                self._rounded_rect(ctx, bx, by, bar_w, bar_h, bar_h / 2)
+                ctx.fill()
+
+                ctx.set_source_rgb(*self._dry_color(pct))
+                self._rounded_rect(ctx, bx, by, fill_w, bar_h, bar_h / 2)
+                ctx.fill()
+
+        return y0 + len(data.routes) * self.ROW_H
+
+    # ── Drawing helpers ───────────────────────────────────────────────────────
+
+    def _divider(self, ctx, y: float):
+        ctx.set_source_rgb(*self.DIVIDER)
+        ctx.rectangle(self.H_PAD, y, self.WIDTH - self.H_PAD * 2, 1)
+        ctx.fill()
+
+    def _rounded_rect(self, ctx, x: float, y: float,
+                      w: float, h: float, r: float):
+        ctx.new_sub_path()
+        ctx.arc(x + w - r, y + r,     r, -math.pi / 2, 0)
+        ctx.arc(x + w - r, y + h - r, r,  0,            math.pi / 2)
+        ctx.arc(x + r,     y + h - r, r,  math.pi / 2,  math.pi)
+        ctx.arc(x + r,     y + r,     r,  math.pi,      3 * math.pi / 2)
+        ctx.close_path()
+
+    def _text(self, ctx, text: str, x: float, y: float,
+              size: int = 16,
+              bold: bool = False,
+              align: str = 'left',
+              color: Optional[Color] = None):
         ctx.set_source_rgb(*(color or self.WHITE))
         weight = cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL
         ctx.select_font_face("Noto Sans", cairo.FONT_SLANT_NORMAL, weight)

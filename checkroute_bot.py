@@ -19,6 +19,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from route_card import (
     RouteCardRenderer, RouteCardData, ForecastRow,
     compute_condition_index, SOIL_DISPLAY,
+    BatchCardRenderer, BatchCardData, BatchRouteRow,
 )
 
 # Импортируем логику из v4
@@ -387,44 +388,28 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Сортируем: лучшие сверху
     route_results.sort(key=lambda r: r["today_dry"], reverse=True)
 
-    # Формируем отчёт в виде таблицы
     sat_label = f"Сб {saturday.strftime('%d.%m')}"
-    sat_short = saturday.strftime('%d.%m')
 
-    verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
-    counts = {4: 0, 3: 0, 2: 0, 1: 0}
-
-    MAX_NAME = 16
-    sep = "─" * 34
-    # Заголовок: 3 пробела вместо «emoji » чтобы колонки совпадали
-    hdr = f"   {'Маршрут':<{MAX_NAME}}  Сч   Зв   {sat_short}"
-
-    table_rows = [hdr, sep]
-    for r in route_results:
-        e = verdict_emoji.get(r["today_level"], "❓")
-        counts[r["today_level"]] += 1
-        name = r['name']
-        if len(name) > MAX_NAME:
-            name = name[:MAX_NAME - 1] + "…"
-        row = (
-            f"{e} {name:<{MAX_NAME}}"
-            f"  {r['today_dry']:>3.0f}%"
-            f"  {r['tomorrow_dry']:>3.0f}%"
-            f"  {r['saturday_dry']:>3.0f}%"
-        )
-        table_rows.append(row)
-    table_rows.append(sep)
-
-    header = (
-        f"<b>📊 Сводка по {len(route_results)} маршрутам</b>\n"
-        f"🌍 {soil_params['name']} | 📅 {today.strftime('%d.%m.%Y')}"
+    # Строим данные для картинки
+    batch_data = BatchCardData(
+        soil_name  = soil_params['name'],
+        date_str   = today.strftime('%d.%m.%Y'),
+        col3_label = sat_label,
+        routes     = [
+            BatchRouteRow(
+                name         = r["name"],
+                today_dry    = r["today_dry"],
+                today_level  = r["today_level"],
+                tomorrow_dry = r["tomorrow_dry"],
+                saturday_dry = r["saturday_dry"],
+            )
+            for r in route_results
+        ],
     )
-    table_lines = "\n".join(f"<code>{row}</code>" for row in table_rows)
-    summary = f"✅ {counts[4]} | 🟢 {counts[3]} | 🟠 {counts[2]} | 🔴 {counts[1]} <i>(сегодня)</i>"
-
-    message = f"{header}\n\n{table_lines}\n\n{summary}"
+    png = BatchCardRenderer().render(batch_data)
 
     # Inline-кнопки для перехода к детальному анализу маршрута
+    verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
     kbd_buttons = []
     row_buf = []
     for r in route_results:
@@ -439,7 +424,12 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kbd_buttons.append(row_buf)
 
     reply_markup = InlineKeyboardMarkup(kbd_buttons)
-    await status_msg.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    await update.message.reply_photo(photo=png, reply_markup=reply_markup)
 
 
 async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
