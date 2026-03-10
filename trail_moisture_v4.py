@@ -16,8 +16,6 @@ import math
 import gpxpy
 from collections import defaultdict
 
-# Порог дождя для сброса счётчика дней
-RAIN_THRESHOLD = 3.0  # мм
 
 SOIL_PARAMS_TABLE = {
     "sand": {"name": "Песок (sand)", "desorptivity": 4.5, "capacity": 10.0, "stage1_ratio": 0.5},

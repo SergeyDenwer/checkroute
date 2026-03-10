@@ -82,41 +82,19 @@ def compute_condition_index(
     return min(100, max(0, round(raw)))
 
 
-# How well each OSM surface type tolerates moisture before becoming unrideable.
-# Multiplier > 1 = surface handles wet conditions better → higher CI still OK.
-SURFACE_CI_MULTIPLIERS: Dict[str, float] = {
-    "asphalt":      2.0,
-    "paved":        2.0,
-    "concrete":     2.0,
-    "gravel":       1.4,
-    "fine_gravel":  1.3,
-    "compacted":    1.2,
-    "wood":         1.1,
-    "dirt":         1.0,
-    "ground":       1.0,
-    "grass":        0.9,
-    "sand":         0.85,
-    "mud":          0.65,
-}
-
-# Verdict thresholds (CI, before surface adjustment).
-# Override via env: CI_CAN_RIDE, CI_PROBABLY_CAN, CI_PROBABLY_CANNOT
-_CI_CAN      = int(os.getenv("CI_CAN_RIDE",        "25"))
-_CI_PROB_CAN = int(os.getenv("CI_PROBABLY_CAN",    "45"))
-_CI_PROB_NO  = int(os.getenv("CI_PROBABLY_CANNOT", "65"))
-
-
-def verdict_from_ci(ci: int, surface: str = "ground") -> tuple:
+# Verdict thresholds. Override via env: CI_CAN_RIDE, CI_PROBABLY_CAN, CI_PROBABLY_CANNOT
+def verdict_from_ci(ci: int) -> tuple:
     """
-    CI-based verdict with surface adjustment.
-    Harder surfaces tolerate higher CI before the verdict degrades.
-    Returns (emoji_text, level) same shape as old get_trail_verdict.
+    CI-based verdict. Returns (emoji_text, level), level 1 (нельзя) … 4 (можно).
+    Thresholds read from env each call so restart-free tuning works.
     """
-    mult = SURFACE_CI_MULTIPLIERS.get(surface, 1.0)
-    if ci <= _CI_CAN * mult:       return "✅ МОЖНО",          4
-    if ci <= _CI_PROB_CAN * mult:  return "🟢 СКОРЕЕ МОЖНО",   3
-    if ci <= _CI_PROB_NO * mult:   return "🟠 СКОРЕЕ НЕЛЬЗЯ",  2
-    return                                "🔴 НЕЛЬЗЯ",          1
+    ci_can      = int(os.getenv("CI_CAN_RIDE",        "25"))
+    ci_prob_can = int(os.getenv("CI_PROBABLY_CAN",    "45"))
+    ci_prob_no  = int(os.getenv("CI_PROBABLY_CANNOT", "65"))
+    if ci <= ci_can:       return "✅ МОЖНО",          4
+    if ci <= ci_prob_can:  return "🟢 СКОРЕЕ МОЖНО",   3
+    if ci <= ci_prob_no:   return "🟠 СКОРЕЕ НЕЛЬЗЯ",  2
+    return                        "🔴 НЕЛЬЗЯ",          1
 
 
 # ──────────────────────────────── Renderer ───────────────────────────────────
