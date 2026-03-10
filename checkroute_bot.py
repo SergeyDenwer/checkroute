@@ -309,13 +309,18 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
-            ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+            if ds.get("avg_rain", 0) >= RAIN_DAY_MM:
+                ds_ci = None
+                ds_level = 0
+            else:
+                ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
+                _, ds_level = verdict_from_ci(ds_ci)
             if ds_date == tomorrow:
-                tomorrow_ci = ds_ci
-                _, tomorrow_level = verdict_from_ci(ds_ci)
+                tomorrow_ci    = ds_ci if ds_ci is not None else 0
+                tomorrow_level = ds_level
             if ds_date == saturday:
-                saturday_ci = ds_ci
-                _, saturday_level = verdict_from_ci(ds_ci)
+                saturday_ci    = ds_ci if ds_ci is not None else 0
+                saturday_level = ds_level
 
     return {
         "today_ci": today_ci,
@@ -338,8 +343,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ В папке routes/ нет GPX файлов")
         return
 
-    soil_type = context.user_data.get('soil', DEFAULT_SOIL)
-    soil_params = get_soil_params(soil_type)
+    soil_params = get_soil_params(DEFAULT_SOIL)
 
     # Целевые даты
     today = datetime.now().date()
@@ -407,7 +411,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     png = BatchCardRenderer().render(batch_data)
 
     # Inline-кнопки для перехода к детальному анализу маршрута
-    verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴"}
+    verdict_emoji = {4: "✅", 3: "🟢", 2: "🟠", 1: "🔴", 0: "🌧"}
 
     # Загружаем Komoot-ссылки если есть
     komoot_urls: dict = {}
