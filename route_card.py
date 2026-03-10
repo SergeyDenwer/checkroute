@@ -394,11 +394,13 @@ class RouteCardRenderer:
 
 @dataclass
 class BatchRouteRow:
-    name:          str
-    today_dry:     float
-    today_level:   int    # 1 (can't ride) … 4 (can ride)
-    tomorrow_dry:  float
-    saturday_dry:  float
+    name:           str
+    today_dry:      float
+    today_level:    int    # 1 (can't ride) … 4 (can ride)
+    tomorrow_dry:   float
+    tomorrow_level: int
+    saturday_dry:   float
+    saturday_level: int
 
 
 @dataclass
@@ -597,7 +599,12 @@ class BatchCardRenderer:
             self._text(ctx, name, self.H_PAD + 22, mid_y + 6, size=14, bold=True)
 
             # Mini bars
-            for cx, pct in zip(centers, [route.today_dry, route.tomorrow_dry, route.saturday_dry]):
+            days = [
+                (route.today_dry,    route.today_level),
+                (route.tomorrow_dry, route.tomorrow_level),
+                (route.saturday_dry, route.saturday_level),
+            ]
+            for cx, (pct, level) in zip(centers, days):
                 bx     = cx - bar_w / 2
                 by     = mid_y - bar_h / 2
                 fill_w = max(bar_h, bar_w * pct / 100)
@@ -606,7 +613,7 @@ class BatchCardRenderer:
                 self._rounded_rect(ctx, bx, by, bar_w, bar_h, bar_h / 2)
                 ctx.fill()
 
-                ctx.set_source_rgb(*self._dry_color(pct))
+                ctx.set_source_rgb(*self._level_color(level))
                 self._rounded_rect(ctx, bx, by, fill_w, bar_h, bar_h / 2)
                 ctx.fill()
 

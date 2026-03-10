@@ -314,21 +314,29 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
 
     # Прогноз — берём меньше точек чтобы не долбить API
     tomorrow_dry = today_dry
+    tomorrow_level = today_level
     saturday_dry = today_dry
+    saturday_level = today_level
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
             if ds_date == tomorrow:
                 tomorrow_dry = ds["dry_pct"]
+                _, tomorrow_level = get_trail_verdict(
+                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if ds_date == saturday:
                 saturday_dry = ds["dry_pct"]
+                _, saturday_level = get_trail_verdict(
+                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
 
     return {
         "today_dry": today_dry,
         "today_level": today_level,
         "tomorrow_dry": tomorrow_dry,
+        "tomorrow_level": tomorrow_level,
         "saturday_dry": saturday_dry,
+        "saturday_level": saturday_level,
     }
 
 
@@ -398,11 +406,13 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col3_label = sat_label,
         routes     = [
             BatchRouteRow(
-                name         = r["name"],
-                today_dry    = r["today_dry"],
-                today_level  = r["today_level"],
-                tomorrow_dry = r["tomorrow_dry"],
-                saturday_dry = r["saturday_dry"],
+                name           = r["name"],
+                today_dry      = r["today_dry"],
+                today_level    = r["today_level"],
+                tomorrow_dry   = r["tomorrow_dry"],
+                tomorrow_level = r["tomorrow_level"],
+                saturday_dry   = r["saturday_dry"],
+                saturday_level = r["saturday_level"],
             )
             for r in route_results
         ],
