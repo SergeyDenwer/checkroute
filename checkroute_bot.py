@@ -422,6 +422,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+    # Кнопки: каждый маршрут — отдельная строка [✅ Название] [🌐]
     kbd_buttons = []
     for r in route_results:
         e     = verdict_emoji.get(r["today_level"], "❓")
