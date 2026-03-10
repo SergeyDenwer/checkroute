@@ -395,7 +395,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Сортируем: лучшие сверху
-    route_results.sort(key=lambda r: r["today_dry"], reverse=True)
+    route_results.sort(key=lambda r: (r["today_level"], r["today_dry"]), reverse=True)
 
     sat_label = f"Сб {saturday.strftime('%d.%m')}"
 
