@@ -422,23 +422,39 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+    # Кнопки анализа — 2 в ряд
     kbd_buttons = []
+    row_buf = []
     for r in route_results:
         e     = verdict_emoji.get(r["today_level"], "❓")
-        label = f"{e} {r['name'][:22]}"
-        row   = [InlineKeyboardButton(label, callback_data=f"r:{r['gpx_file'][:61]}")]
-        url   = komoot_urls.get(r["gpx_file"], "")
-        if url:
-            row.append(InlineKeyboardButton("🌐", url=url))
-        kbd_buttons.append(row)
+        label = f"{e} {r['name'][:18]}"
+        row_buf.append(InlineKeyboardButton(label, callback_data=f"r:{r['gpx_file'][:61]}"))
+        if len(row_buf) == 2:
+            kbd_buttons.append(row_buf)
+            row_buf = []
+    if row_buf:
+        kbd_buttons.append(row_buf)
 
     reply_markup = InlineKeyboardMarkup(kbd_buttons)
+
+    # Komoot-ссылки в подписи к фото
+    komoot_parts = [
+        f'<a href="{komoot_urls[r["gpx_file"]]}">{r["name"]}</a>'
+        for r in route_results
+        if komoot_urls.get(r["gpx_file"])
+    ]
+    caption = ("🌐 " + "  ·  ".join(komoot_parts)) if komoot_parts else None
 
     try:
         await status_msg.delete()
     except Exception:
         pass
-    await update.message.reply_photo(photo=png, reply_markup=reply_markup)
+    await update.message.reply_photo(
+        photo=png,
+        caption=caption,
+        parse_mode='HTML' if caption else None,
+        reply_markup=reply_markup,
+    )
 
 
 async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
