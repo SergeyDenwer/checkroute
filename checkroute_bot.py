@@ -173,6 +173,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
 
     results = []
     errors = 0
+    skipped_paved = 0
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
             surface = fetch_surface_type(lat, lon)
@@ -180,10 +181,12 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                 # Пробуем точку +1 км по треку
                 shifted = get_point_at_distance(points, dist_km + 1.0)
                 if shifted is None:
+                    skipped_paved += 1
                     continue  # конец трека — пропускаем
                 lat, lon, elev, dist_km = shifted
                 surface = fetch_surface_type(lat, lon)
                 if surface in PAVED_SURFACES:
+                    skipped_paved += 1
                     continue  # снова асфальт — пропускаем
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
@@ -262,6 +265,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         mud_pct=mud_pct,
         swamp_pct=swamp_pct,
         forecast_rows=forecast_rows,
+        points_sampled=len(sampled),
+        points_analyzed=len(results),
     )
 
     return card_data, None
