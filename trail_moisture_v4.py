@@ -10,6 +10,7 @@ Trail Moisture Index Calculator v4
 """
 
 import logging
+import time
 import requests
 from datetime import datetime, timedelta
 import argparse
@@ -323,40 +324,51 @@ def fetch_surface_type(lat: float, lon: float) -> str:
         f"[highway];"
         f"out tags;"
     )
-    try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data={"data": query},
-            timeout=12,
-        )
-        if resp.status_code != 200:
-            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f)", resp.status_code, lat, lon)
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://overpass-api.de/api/interpreter",
+                data={"data": query},
+                timeout=12,
+            )
+            if resp.status_code in (429, 503, 504):
+                wait = 2 ** attempt * 3
+                logger.warning(
+                    "surface_type OSM HTTP %s at (%.5f, %.5f), retry in %ds (attempt %d/3)",
+                    resp.status_code, lat, lon, wait, attempt + 1,
+                )
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f) → error", resp.status_code, lat, lon)
+                return "error"
+            elements = resp.json().get("elements", [])
+            if not elements:
+                logger.debug("surface_type no ways at (%.5f, %.5f) → ground", lat, lon)
+                return "ground"
+            highways = [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements]
+            logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon, highways)
+            # Prefer explicit surface tag
+            for el in elements:
+                tags = el.get("tags", {})
+                if "surface" in tags:
+                    result = tags["surface"]
+                    logger.info("surface_type (%.5f, %.5f) surface_tag=%s → %s", lat, lon, result, result)
+                    return result
+            # Fallback: paved highway type → treat as asphalt
+            for el in elements:
+                hw = el.get("tags", {}).get("highway")
+                if hw in PAVED_HIGHWAY_TYPES:
+                    logger.info("surface_type (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
+                    return "asphalt"
+            hw_types = [el.get("tags", {}).get("highway") for el in elements]
+            logger.info("surface_type (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
             return "ground"
-        elements = resp.json().get("elements", [])
-        if not elements:
-            logger.debug("surface_type no ways at (%.5f, %.5f) → ground", lat, lon)
-            return "ground"
-        highways = [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements]
-        logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon, highways)
-        # Prefer explicit surface tag
-        for el in elements:
-            tags = el.get("tags", {})
-            if "surface" in tags:
-                result = tags["surface"]
-                logger.info("surface_type (%.5f, %.5f) surface_tag=%s → %s", lat, lon, result, result)
-                return result
-        # Fallback: paved highway type → treat as asphalt
-        for el in elements:
-            hw = el.get("tags", {}).get("highway")
-            if hw in PAVED_HIGHWAY_TYPES:
-                logger.info("surface_type (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
-                return "asphalt"
-        hw_types = [el.get("tags", {}).get("highway") for el in elements]
-        logger.info("surface_type (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
-        return "ground"
-    except Exception as e:
-        logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
-        return "ground"
+        except Exception as e:
+            logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
+            return "error"
+    logger.warning("surface_type all retries failed at (%.5f, %.5f) → error", lat, lon)
+    return "error"
 
 
 def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
