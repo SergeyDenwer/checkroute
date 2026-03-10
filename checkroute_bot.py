@@ -311,31 +311,34 @@ def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday):
     today_mud = agg.get("mud", {}).get("percent", 0)
     today_swamp = agg.get("swamp", {}).get("percent", 0)
     _, today_level = get_trail_verdict(today_dry, today_wet, today_mud, today_swamp)
+    today_ci = compute_condition_index(today_dry, today_wet, today_mud, today_swamp)
 
     # Прогноз — берём меньше точек чтобы не долбить API
-    tomorrow_dry = today_dry
+    tomorrow_ci = today_ci
     tomorrow_level = today_level
-    saturday_dry = today_dry
+    saturday_ci = today_ci
     saturday_level = today_level
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
             if ds_date == tomorrow:
-                tomorrow_dry = ds["dry_pct"]
+                tomorrow_ci = compute_condition_index(
+                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
                 _, tomorrow_level = get_trail_verdict(
                     ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
             if ds_date == saturday:
-                saturday_dry = ds["dry_pct"]
+                saturday_ci = compute_condition_index(
+                    ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
                 _, saturday_level = get_trail_verdict(
                     ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
 
     return {
-        "today_dry": today_dry,
+        "today_ci": today_ci,
         "today_level": today_level,
-        "tomorrow_dry": tomorrow_dry,
+        "tomorrow_ci": tomorrow_ci,
         "tomorrow_level": tomorrow_level,
-        "saturday_dry": saturday_dry,
+        "saturday_ci": saturday_ci,
         "saturday_level": saturday_level,
     }
 
@@ -394,8 +397,8 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Не удалось проанализировать ни одного маршрута")
         return
 
-    # Сортируем: лучшие сверху
-    route_results.sort(key=lambda r: (r["today_level"], r["today_dry"]), reverse=True)
+    # Сортируем: лучшие сверху (выше level = лучше, ниже ci = лучше)
+    route_results.sort(key=lambda r: (-r["today_level"], r["today_ci"]))
 
     sat_label = f"Сб {saturday.strftime('%d.%m')}"
 
@@ -407,11 +410,11 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         routes     = [
             BatchRouteRow(
                 name           = r["name"],
-                today_dry      = r["today_dry"],
+                today_ci       = r["today_ci"],
                 today_level    = r["today_level"],
-                tomorrow_dry   = r["tomorrow_dry"],
+                tomorrow_ci    = r["tomorrow_ci"],
                 tomorrow_level = r["tomorrow_level"],
-                saturday_dry   = r["saturday_dry"],
+                saturday_ci    = r["saturday_ci"],
                 saturday_level = r["saturday_level"],
             )
             for r in route_results
