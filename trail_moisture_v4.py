@@ -21,15 +21,7 @@ import gpxpy
 from collections import defaultdict
 
 
-SOIL_PARAMS_TABLE = {
-    "sand": {"name": "Песок (sand)", "desorptivity": 4.5, "capacity": 10.0, "stage1_ratio": 0.5},
-    "sandy_loam": {"name": "Супесь (sandy loam)", "desorptivity": 4.0, "capacity": 12.0, "stage1_ratio": 0.5},
-    "loam": {"name": "Суглинок (loam)", "desorptivity": 3.5, "capacity": 15.0, "stage1_ratio": 0.5},
-    "silt_loam": {"name": "Пылеватый суглинок (silt loam)", "desorptivity": 3.2, "capacity": 16.0, "stage1_ratio": 0.5},
-    "clay_loam": {"name": "Глинистый суглинок (clay loam)", "desorptivity": 3.0, "capacity": 18.0, "stage1_ratio": 0.5},
-    "clay": {"name": "Глина (clay)", "desorptivity": 2.5, "capacity": 20.0, "stage1_ratio": 0.5},
-    "chernozem": {"name": "Чернозём (chernozem)", "desorptivity": 3.0, "capacity": 18.0, "stage1_ratio": 0.5},
-}
+SOIL_PARAMS = {"capacity": 15.0, "desorptivity": 3.5, "stage1_ratio": 0.5}
 
 STATUS_THRESHOLDS = [
     (0.20, "☀️ СУХО", "dry"),
@@ -139,12 +131,6 @@ def get_point_at_distance(points, target_dist_km):
             return points[i][0], points[i][1], points[i][2], cum
     return None
 
-
-
-    """Возвращает параметры почвы."""
-    if soil_type and soil_type in SOIL_PARAMS_TABLE:
-        return SOIL_PARAMS_TABLE[soil_type].copy()
-    return SOIL_PARAMS_TABLE["loam"].copy()
 
 
 def fetch_weather_data(lat, lon, days_back=14):
@@ -453,7 +439,7 @@ def get_status(moisture, capacity):
     return STATUS_THRESHOLDS[-1][1], STATUS_THRESHOLDS[-1][2]
 
 
-def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
+def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
     """
     Анализ всего трейла:
     1. Парсим GPX
@@ -492,9 +478,9 @@ def analyze_trail(gpx_file, soil_params, sample_km=5.0, verbose=True):
         
         try:
             weather = fetch_weather_data(lat, lon, days_back=14)
-            state = simulate_moisture(weather, soil_params)
+            state = simulate_moisture(weather, SOIL_PARAMS)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
-            
+
             results.append({
                 "lat": lat,
                 "lon": lon,
@@ -545,7 +531,7 @@ def aggregate_status(results):
     return percentages
 
 
-def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=True):
+def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
     """
     Прогноз когда трейл станет сухим.
     Берём равномерно распределённые точки, симулируем высыхание, усредняем.
@@ -575,7 +561,7 @@ def forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=
                 "snow_cover": point["snow_cover"],
             }
             
-            forecast_results = simulate_forecast(initial_state, forecast, soil_params)
+            forecast_results = simulate_forecast(initial_state, forecast, SOIL_PARAMS)
             all_forecasts.append({
                 "point": point,
                 "forecast": forecast_results,
@@ -682,7 +668,7 @@ def get_trail_verdict(dry_pct, wet_pct, mud_pct, swamp_pct):
         return "🔴 НЕЛЬЗЯ", 1
 
 
-def print_summary(results, total_distance, forecast_info, soil_params):
+def print_summary(results, total_distance, forecast_info):
     """Печатаем красивый итог"""
     
     print(f"\n{'='*60}")
@@ -757,16 +743,13 @@ def print_summary(results, total_distance, forecast_info, soil_params):
             else:
                 print(f"{v}: сейчас")
     
-    print(f"\n📖 Почва: {soil_params['name']}")
     print(f"{'='*60}\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description='Trail Moisture v4 — GPX анализ')
     parser.add_argument('--gpx', type=str, required=True, help='Путь к GPX файлу')
-    parser.add_argument('--soil', type=str, default=None, 
-                        help='Тип почвы: sand, sandy_loam, loam, silt_loam, clay_loam, clay, chernozem')
-    parser.add_argument('--sample-km', type=float, default=5.0, 
+    parser.add_argument('--sample-km', type=float, default=5.0,
                         help='Интервал сэмплирования в км (по умолчанию 5)')
     parser.add_argument('--no-forecast', action='store_true', help='Не делать прогноз')
     args = parser.parse_args()
@@ -776,25 +759,20 @@ def main():
     print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}\n")
     
-    soil_params = get_soil_params(args.soil)
-    print(f"🌍 Почва: {soil_params['name']}")
-    print()
-    
     # Анализ трейла
     results, total_distance = analyze_trail(
-        args.gpx, 
-        soil_params, 
+        args.gpx,
         sample_km=args.sample_km,
         verbose=True
     )
-    
+
     # Прогноз
     forecast_info = None
     if not args.no_forecast:
-        forecast_info = forecast_trail_drying(results, soil_params, verbose=True)
-    
+        forecast_info = forecast_trail_drying(results, verbose=True)
+
     # Итог
-    print_summary(results, total_distance, forecast_info, soil_params)
+    print_summary(results, total_distance, forecast_info)
 
 
 if __name__ == "__main__":

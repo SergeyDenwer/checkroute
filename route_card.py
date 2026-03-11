@@ -7,7 +7,6 @@ Usage:
     data = RouteCardData(
         route_name="Гравийная Муха",
         length_km=23.4,
-        soil_name="Суглинок",
         condition_index=compute_condition_index(dry_pct=10, wet_pct=20, mud_pct=50, swamp_pct=20),
         verdict_text="НЕЛЬЗЯ",
         verdict_level=1,
@@ -31,17 +30,6 @@ import cairo
 
 Color = Tuple[float, float, float]
 
-# Russian display names for soil types
-SOIL_DISPLAY = {
-    "sand":       "Песок",
-    "sandy_loam": "Супесь",
-    "loam":       "Суглинок",
-    "silt_loam":  "Илистый суглинок",
-    "clay_loam":  "Глинистый суглинок",
-    "clay":       "Глина",
-    "chernozem":  "Чернозём",
-}
-
 
 # ─────────────────────────────── Data models ─────────────────────────────────
 
@@ -57,7 +45,6 @@ class ForecastRow:
 class RouteCardData:
     route_name:      str
     length_km:       float          # kilometres, e.g. 23.4
-    soil_name:       str            # human-readable, e.g. "Суглинок"
     condition_index: int            # 0 (perfectly dry) → 100 (fully swamped)
     verdict_text:    str            # "НЕЛЬЗЯ" / "СКОРЕЕ НЕЛЬЗЯ" / "СКОРЕЕ МОЖНО" / "МОЖНО"
     verdict_level:   int            # 1 – 4
@@ -193,7 +180,7 @@ class RouteCardRenderer:
                    cx, y0 + 52, size=30, bold=True, align='center')
 
         pts = f"{data.points_analyzed} из {data.points_sampled} точек" if data.points_sampled else ""
-        subtitle = f"{data.length_km:.1f} km  ·  {data.soil_name}" + (f"  ·  {pts}" if pts else "")
+        subtitle = f"{data.length_km:.1f} km" + (f"  ·  {pts}" if pts else "")
         self._text(ctx, subtitle,
                    cx, y0 + 82, size=18, align='center', color=self.GRAY)
 
@@ -428,7 +415,6 @@ class BatchRouteRow:
 
 @dataclass
 class BatchCardData:
-    soil_name:   str    # e.g. "Суглинок"
     date_str:    str    # e.g. "10.03.2026"
     col3_label:  str    # e.g. "Сб 14.03"
     col4_label:  str    # e.g. "Вс 15.03"
@@ -542,7 +528,7 @@ class BatchCardRenderer:
         self._text(ctx, "СВОДКА МАРШРУТОВ",
                    cx, y0 + 42, size=24, bold=True, align='center')
 
-        subtitle = f"{data.soil_name}  ·  {data.date_str}  ·  {len(data.routes)} маршрутов"
+        subtitle = f"{data.date_str}  ·  {len(data.routes)} маршрутов"
         self._text(ctx, subtitle,
                    cx, y0 + 66, size=15, align='center', color=self.GRAY)
 

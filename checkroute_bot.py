@@ -20,7 +20,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 from route_card import (
     RouteCardRenderer, RouteCardData, ForecastRow,
-    compute_condition_index, verdict_from_ci, SOIL_DISPLAY,
+    compute_condition_index, verdict_from_ci,
     BatchCardRenderer, BatchCardData, BatchRouteRow,
 )
 
@@ -36,7 +36,7 @@ from trail_moisture_v4 import (
     aggregate_status,
     forecast_trail_drying,
     haversine_distance,
-    SOIL_PARAMS_TABLE,
+    SOIL_PARAMS,
     PAVED_SURFACES,
 )
 
@@ -47,8 +47,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Дефолтные настройки
-DEFAULT_SOIL = "loam"
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
 VERDICT_LABELS = {
@@ -127,7 +125,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("🔍 Анализирую маршрут...")
 
         route_name = os.path.splitext(document.file_name)[0].replace('_', ' ')
-        card_data, error = await analyze_gpx(gpx_path, DEFAULT_SOIL, status_msg, route_name)
+        card_data, error = await analyze_gpx(gpx_path, status_msg, route_name)
 
         if error:
             await status_msg.edit_text(error, parse_mode='HTML')
@@ -147,7 +145,7 @@ async def handle_gpx(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(gpx_path)
 
 
-async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = ""):
+async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     """
     Анализ GPX.
     Возвращает (RouteCardData, None) при успехе или (None, error_text) при ошибке.
@@ -162,7 +160,6 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     )
 
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
-    soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
 
     header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
     total = len(sampled)
@@ -197,7 +194,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                 progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
             if surface not in PAVED_SURFACES and surface != "error":
                 weather = fetch_weather_data(lat, lon, days_back=14)
-                point_soil = apply_surface_modifiers(soil_params, surface)
+                point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
                 state = simulate_moisture(weather, point_soil)
                 status_label, status_key = get_status(state["moisture"], state["capacity"])
                 results.append({
@@ -244,7 +241,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
 
     # Строим строки прогноза
     forecast_rows = []
-    forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=10, verbose=False)
+    forecast_info = forecast_trail_drying(results, max_forecast_points=10, verbose=False)
 
     if forecast_info and forecast_info.get("daily_stats"):
         today = datetime.now().date()
@@ -279,7 +276,6 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     card_data = RouteCardData(
         route_name=route_name or "Маршрут",
         length_km=round(total_distance, 1),
-        soil_name=SOIL_DISPLAY.get(soil_type, soil_params["name"]),
         condition_index=ci,
         verdict_text=VERDICT_LABELS[verdict_level],
         verdict_level=verdict_level,
@@ -295,7 +291,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     return card_data, None
 
 
-async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, sunday, on_progress=None):
+async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progress=None):
     """Анализ одного маршрута для сводки. Возвращает dict или None.
     on_progress(done, total, dist_km, surface, status_label) вызывается после каждой точки.
     """
@@ -326,7 +322,7 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, sun
                     await on_progress(idx + 1, total, dist_km, surface, None)
                 continue
             weather = fetch_weather_data(lat, lon, days_back=14)
-            point_soil = apply_surface_modifiers(soil_params, surface)
+            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             results.append({
@@ -364,7 +360,7 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, sun
     saturday_level = today_level
     sunday_ci      = today_ci
     sunday_level   = today_level
-    forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
+    forecast_info = forecast_trail_drying(results, max_forecast_points=5, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
@@ -407,8 +403,6 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ В папке routes/ нет GPX файлов")
         return
 
-    soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
-
     # Целевые даты
     today = datetime.now().date()
     tomorrow = today + timedelta(days=1)
@@ -419,7 +413,6 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text(
         f"📊 Анализирую {len(gpx_files)} маршрутов...\n"
-        f"🌍 {soil_params['name']}\n\n"
         f"Это займёт несколько минут ☕"
     )
 
@@ -477,7 +470,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             result = await analyze_route_for_batch(
-                gpx_path, soil_params, tomorrow, saturday, sunday, on_progress=on_point_progress
+                gpx_path, tomorrow, saturday, sunday, on_progress=on_point_progress
             )
             if result:
                 result["name"] = route_name
@@ -503,7 +496,6 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Строим данные для картинки
     batch_data = BatchCardData(
-        soil_name  = soil_params['name'],
         date_str   = today.strftime('%d.%m.%Y'),
         col3_label = sat_label,
         col4_label = sun_label,
@@ -572,7 +564,7 @@ async def route_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
     status_msg = await query.message.reply_text(f"🔍 Анализирую {route_name}...")
 
-    card_data, error = await analyze_gpx(gpx_path, DEFAULT_SOIL, status_msg, route_name)
+    card_data, error = await analyze_gpx(gpx_path, status_msg, route_name)
 
     if error:
         await status_msg.edit_text(error, parse_mode='HTML')
