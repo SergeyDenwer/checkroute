@@ -476,6 +476,7 @@ class BatchCardRenderer:
         (0.976, 0.451, 0.086),   # #F97316  orange
         (0.937, 0.267, 0.267),   # #EF4444  red
     )
+    _RAIN_COLOR: Color = (0.243, 0.631, 0.957)  # #3EA1F4  blue — rain/level 0
 
     # ── Colour helpers ────────────────────────────────────────────────────────
 
