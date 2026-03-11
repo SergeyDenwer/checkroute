@@ -285,7 +285,7 @@ class RouteCardRenderer:
         card_w  = self.WIDTH - pad * 2
         card_h  = len(data.forecast_rows) * row_h + 20
 
-        self._text(ctx, "Когда можно ехать:",
+        self._text(ctx, "Прогноз:",
                    pad + 4, title_y, size=20, color=self.GRAY)
 
         for i, row in enumerate(data.forecast_rows):
