@@ -48,7 +48,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Дефолтные настройки
-DEFAULT_SAMPLE_KM = 4.0
+DEFAULT_SAMPLE_KM = 2.0
 DEFAULT_SOIL = "loam"
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
