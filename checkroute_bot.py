@@ -48,7 +48,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Дефолтные настройки
-DEFAULT_SAMPLE_KM = 5.0
 DEFAULT_SOIL = "loam"
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
 
@@ -162,7 +161,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
         for i in range(1, len(points))
     )
 
-    sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
+    sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
     soil_params = SOIL_PARAMS_TABLE[DEFAULT_SOIL].copy()
 
     header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
@@ -304,7 +303,11 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_
     if not points:
         return None
 
-    sampled = sample_points_by_distance(points, DEFAULT_SAMPLE_KM)
+    total_distance = sum(
+        haversine_distance(points[i-1][0], points[i-1][1], points[i][0], points[i][1])
+        for i in range(1, len(points))
+    )
+    sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
     total = len(sampled)
 
     # Текущее состояние по каждой точке
