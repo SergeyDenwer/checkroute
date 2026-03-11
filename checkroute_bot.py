@@ -295,7 +295,7 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
     return card_data, None
 
 
-async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_progress=None):
+async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, sunday, on_progress=None):
     """Анализ одного маршрута для сводки. Возвращает dict или None.
     on_progress(done, total, dist_km, surface, status_label) вызывается после каждой точки.
     """
@@ -362,6 +362,8 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_
     tomorrow_level = today_level
     saturday_ci    = today_ci
     saturday_level = today_level
+    sunday_ci      = today_ci
+    sunday_level   = today_level
     forecast_info = forecast_trail_drying(results, soil_params, max_forecast_points=5, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
@@ -378,6 +380,9 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_
             if ds_date == saturday:
                 saturday_ci    = ds_ci if ds_ci is not None else 0
                 saturday_level = ds_level
+            if ds_date == sunday:
+                sunday_ci      = ds_ci if ds_ci is not None else 0
+                sunday_level   = ds_level
 
     return {
         "today_ci": today_ci,
@@ -386,6 +391,8 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_
         "tomorrow_level": tomorrow_level,
         "saturday_ci": saturday_ci,
         "saturday_level": saturday_level,
+        "sunday_ci": sunday_ci,
+        "sunday_level": sunday_level,
     }
 
 
@@ -406,8 +413,9 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.now().date()
     tomorrow = today + timedelta(days=1)
     days_to_sat = (5 - today.weekday()) % 7
-    # Если суббота <= завтра — берём следующую, чтобы все 3 колонки были разными
+    # Если суббота <= завтра — берём следующую, чтобы все колонки были разными
     saturday = today + timedelta(days=days_to_sat if days_to_sat > 1 else days_to_sat + 7)
+    sunday   = saturday + timedelta(days=1)
 
     status_msg = await update.message.reply_text(
         f"📊 Анализирую {len(gpx_files)} маршрутов...\n"
@@ -469,7 +477,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             result = await analyze_route_for_batch(
-                gpx_path, soil_params, tomorrow, saturday, on_progress=on_point_progress
+                gpx_path, soil_params, tomorrow, saturday, sunday, on_progress=on_point_progress
             )
             if result:
                 result["name"] = route_name
@@ -491,12 +499,14 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     route_results.sort(key=lambda r: (-r["today_level"], r["today_ci"]))
 
     sat_label = f"Сб {saturday.strftime('%d.%m')}"
+    sun_label = f"Вс {sunday.strftime('%d.%m')}"
 
     # Строим данные для картинки
     batch_data = BatchCardData(
         soil_name  = soil_params['name'],
         date_str   = today.strftime('%d.%m.%Y'),
         col3_label = sat_label,
+        col4_label = sun_label,
         routes     = [
             BatchRouteRow(
                 name           = r["name"],
@@ -506,6 +516,8 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tomorrow_level = r["tomorrow_level"],
                 saturday_ci    = r["saturday_ci"],
                 saturday_level = r["saturday_level"],
+                sunday_ci      = r["sunday_ci"],
+                sunday_level   = r["sunday_level"],
             )
             for r in route_results
         ],
