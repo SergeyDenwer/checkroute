@@ -78,6 +78,18 @@ def parse_gpx(gpx_file):
     return points
 
 
+def adaptive_sample_km(total_km: float) -> float:
+    """Шаг выборки в зависимости от длины маршрута."""
+    if total_km <= 60:
+        return 2.0
+    elif total_km <= 100:
+        return 3.0
+    elif total_km <= 150:
+        return 4.0
+    else:
+        return 5.0
+
+
 def sample_points_by_distance(points, sample_km=5.0):
     """
     Выбираем точки через каждые sample_km километров.
