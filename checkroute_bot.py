@@ -34,6 +34,7 @@ from trail_moisture_v4 import (
     simulate_moisture,
     get_status,
     aggregate_status,
+    adaptive_sample_km,
     forecast_trail_drying,
     haversine_distance,
     SOIL_PARAMS,
