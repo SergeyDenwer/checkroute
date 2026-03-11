@@ -28,8 +28,6 @@ from route_card import (
 from trail_moisture_v4 import (
     parse_gpx,
     sample_points_by_distance,
-    adaptive_sample_km,
-
     fetch_weather_data,
     fetch_surface_type,
     apply_surface_modifiers,
