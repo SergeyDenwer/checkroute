@@ -82,9 +82,9 @@ def adaptive_sample_km(total_km: float) -> float:
     """Шаг выборки в зависимости от длины маршрута."""
     if total_km <= 60:
         return 2.0
-    elif total_km <= 100:
+    elif total_km <= 90:
         return 3.0
-    elif total_km <= 150:
+    elif total_km <= 120:
         return 4.0
     else:
         return 5.0
