@@ -422,6 +422,8 @@ class BatchRouteRow:
     tomorrow_level: int
     saturday_ci:    int
     saturday_level: int
+    sunday_ci:      int
+    sunday_level:   int
 
 
 @dataclass
@@ -429,6 +431,7 @@ class BatchCardData:
     soil_name:   str    # e.g. "Суглинок"
     date_str:    str    # e.g. "10.03.2026"
     col3_label:  str    # e.g. "Сб 14.03"
+    col4_label:  str    # e.g. "Вс 15.03"
     routes:      List[BatchRouteRow]
 
     @property
@@ -523,11 +526,11 @@ class BatchCardRenderer:
     # ── Column geometry ───────────────────────────────────────────────────────
 
     def _col_centers(self) -> List[float]:
-        """X centers for the 3 data columns (Сегодня / Завтра / Суббота)."""
-        name_end  = self.H_PAD + 220
+        """X centers for the 4 data columns (Сегодня / Завтра / Суббота / Воскресенье)."""
+        name_end  = self.H_PAD + 180
         right_end = self.WIDTH - self.H_PAD
-        col_w     = (right_end - name_end) / 3
-        return [name_end + col_w * (i + 0.5) for i in range(3)]
+        col_w     = (right_end - name_end) / 4
+        return [name_end + col_w * (i + 0.5) for i in range(4)]
 
     # ── Header ────────────────────────────────────────────────────────────────
 
@@ -590,7 +593,7 @@ class BatchCardRenderer:
         self._text(ctx, "Маршрут",
                    self.H_PAD + 20, ty, size=13, color=self.GRAY)
 
-        for cx, label in zip(centers, ["Сегодня", "Завтра", data.col3_label]):
+        for cx, label in zip(centers, ["Сегодня", "Завтра", data.col3_label, data.col4_label]):
             self._text(ctx, label, cx, ty, size=13, align='center', color=self.GRAY)
 
         self._divider(ctx, y0 + h - 1)
@@ -617,8 +620,8 @@ class BatchCardRenderer:
 
             # Route name
             name = route.name
-            if len(name) > 22:
-                name = name[:21] + "…"
+            if len(name) > 18:
+                name = name[:17] + "…"
             self._text(ctx, name, self.H_PAD + 22, mid_y + 6, size=14, bold=True)
 
             # Mini bars (fill = 100 - ci, so fuller = better)
@@ -626,6 +629,7 @@ class BatchCardRenderer:
                 (route.today_ci,    route.today_level),
                 (route.tomorrow_ci, route.tomorrow_level),
                 (route.saturday_ci, route.saturday_level),
+                (route.sunday_ci,   route.sunday_level),
             ]
             for cx, (ci, level) in zip(centers, days):
                 bx     = cx - bar_w / 2
