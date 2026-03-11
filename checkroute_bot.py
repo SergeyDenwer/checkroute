@@ -38,7 +38,6 @@ from trail_moisture_v4 import (
     haversine_distance,
     SOIL_PARAMS_TABLE,
     PAVED_SURFACES,
-    get_point_at_distance,
 )
 
 # Настройка логирования
@@ -195,19 +194,8 @@ async def analyze_gpx(gpx_path: str, soil_type: str, message, route_name: str = 
                 skipped_paved += 1
                 progress_lines.append(f"  км {dist_km:.1f} — ⚠️ нет данных OSM")
             elif surface in PAVED_SURFACES:
-                shifted = get_point_at_distance(points, dist_km + 1.0)
-                if shifted is None:
-                    skipped_paved += 1
-                    progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
-                else:
-                    lat, lon, elev, dist_km = shifted
-                    surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
-                    if surface in (PAVED_SURFACES | {"error"}):
-                        skipped_paved += 1
-                        progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
-                    else:
-                        # упадёт в общий блок ниже через флаг
-                        pass
+                skipped_paved += 1
+                progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
             if surface not in PAVED_SURFACES and surface != "error":
                 weather = fetch_weather_data(lat, lon, days_back=14)
                 point_soil = apply_surface_modifiers(soil_params, surface)
@@ -331,17 +319,9 @@ async def analyze_route_for_batch(gpx_path, soil_params, tomorrow, saturday, on_
                     await on_progress(idx + 1, total, dist_km, "error", None)
                 continue
             if surface in PAVED_SURFACES:
-                shifted = get_point_at_distance(points, dist_km + 1.0)
-                if shifted is None:
-                    if on_progress:
-                        await on_progress(idx + 1, total, dist_km, surface, None)
-                    continue
-                lat, lon, elev, dist_km = shifted
-                surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
-                if surface in (PAVED_SURFACES | {"error"}):
-                    if on_progress:
-                        await on_progress(idx + 1, total, dist_km, surface, None)
-                    continue
+                if on_progress:
+                    await on_progress(idx + 1, total, dist_km, surface, None)
+                continue
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(soil_params, surface)
             state = simulate_moisture(weather, point_soil)
