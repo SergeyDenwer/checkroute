@@ -129,12 +129,19 @@ class RouteCardRenderer:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    SCALE = 2   # render at 2× for crisp display — matches BatchCardRenderer
+
     def render(self, data: RouteCardData) -> bytes:
         """Return PNG image as bytes."""
         total_h = self._total_height(data)
 
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.WIDTH, total_h)
+        surface = cairo.ImageSurface(
+            cairo.FORMAT_ARGB32,
+            self.WIDTH  * self.SCALE,
+            total_h * self.SCALE,
+        )
         ctx = cairo.Context(surface)
+        ctx.scale(self.SCALE, self.SCALE)
 
         ctx.set_source_rgb(*self.BG)
         ctx.paint()
@@ -153,7 +160,7 @@ class RouteCardRenderer:
 
     def _total_height(self, data: RouteCardData) -> int:
         # rows_start - card_y = (38+34) + 126 = 198; card_h = 198 + 168 + 16 = 382
-        h = 110          # header
+        h = 80           # header
         h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
             h += 38 + 6 + len(data.forecast_rows) * 56 + 20
@@ -181,8 +188,8 @@ class RouteCardRenderer:
         ctx.fill()
 
         lx = 16 + 5 + 8   # stripe(5) + gap(8) + L_PAD(16) — mirrors batch card
-        self._text(ctx, data.route_name,
-                   lx, y0 + 42, size=24, bold=True)
+        self._text(ctx, data.route_name.upper(),
+                   lx, y0 + 42, size=28, bold=True)
 
         pts = f"{data.points_analyzed} из {data.points_sampled} точек" if data.points_sampled else ""
         subtitle = f"{data.length_km:.1f} km" + (f"  ·  {pts}" if pts else "")
