@@ -290,21 +290,28 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 
 
 # Как OSM surface влияет на физику симуляции:
-# capacity_mult     — насколько точка держит воду (гравий дренирует, глина держит)
-# desorptivity_mult — насколько быстро сохнет в Stage 2
-# snow_factor       — доля snow_cover, блокирующая испарение (0.3 = снег стекает с гравия/камней)
+# capacity_mult     — удержание воды относительно суглинка (dirt=1.0, ~35–45% VWC)
+#                     gravel ~3–5% VWC → 0.15; sand ~10–25% VWC → 0.40
+#                     Источник: Cornell NRCCA, Oklahoma State Extension, IAEA TCS-30
+# desorptivity_mult — скорость высыхания Stage 2 (сорптивность Philip)
+#                     sand S≈4 мм·с⁻¹/², loam S≈1, clay S≈0.1; gravel free-draining
+#                     Источник: Leeds-Harrison et al. (1994), Youngs (1968)
+# snow_factor       — доля snow_cover, реально блокирующая испарение
+#                     = 1 − runoff_coeff (Rational Method / USDA TR-55)
+#                     gravel C≈0.7 → snow_factor≈0.25; bare soil C≈0.35 → snow_factor≈0.75
+#                     Источник: USDA TR-55 Table 2-2a, California Water Boards
 SURFACE_SOIL_MODIFIERS = {
-    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
-    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
-    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
-    "gravel":       {"capacity_mult": 0.55, "desorptivity_mult": 1.6,  "snow_factor": 0.3},
-    "fine_gravel":  {"capacity_mult": 0.60, "desorptivity_mult": 1.5,  "snow_factor": 0.3},
-    "compacted":    {"capacity_mult": 0.65, "desorptivity_mult": 1.4,  "snow_factor": 0.6},
-    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
-    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
-    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
-    "grass":        {"capacity_mult": 1.15, "desorptivity_mult": 0.85, "snow_factor": 1.0},
-    "sand":         {"capacity_mult": 0.80, "desorptivity_mult": 1.3,  "snow_factor": 0.5},
+    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "gravel":       {"capacity_mult": 0.15, "desorptivity_mult": 4.5,  "snow_factor": 0.25},
+    "fine_gravel":  {"capacity_mult": 0.20, "desorptivity_mult": 3.5,  "snow_factor": 0.25},
+    "compacted":    {"capacity_mult": 0.55, "desorptivity_mult": 1.4,  "snow_factor": 0.45},
+    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "grass":        {"capacity_mult": 1.10, "desorptivity_mult": 0.85, "snow_factor": 1.0},
+    "sand":         {"capacity_mult": 0.40, "desorptivity_mult": 3.0,  "snow_factor": 0.65},
     "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65, "snow_factor": 1.0},
 }
 
