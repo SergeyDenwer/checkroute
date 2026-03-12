@@ -205,7 +205,9 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
         actual_melt = min(snow_water, melt_potential)
         snow_cover -= actual_melt * 10
         snow_cover = max(0, snow_cover)
-        water_input += actual_melt
+        # Для быстродренирующих поверхностей (gravel, rock) большая часть талой воды
+        # стекает немедленно и не задерживается на поверхности
+        water_input += actual_melt * SNOW_FACTOR
 
     # Плавное обновление wet_index: каждый мм дождя вносит вклад, каждый сухой день гасит 15%
     rain_signal = water_input / (water_input + 5.0) if water_input > 0 else 0.0
