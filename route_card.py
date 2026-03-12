@@ -422,7 +422,7 @@ class BatchCardData:
 
     @property
     def counts(self) -> Dict[int, int]:
-        c: Dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
+        c: Dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
         for r in self.routes:
             c[r.today_level] = c.get(r.today_level, 0) + 1
         return c
@@ -508,7 +508,7 @@ class BatchCardRenderer:
     # ── Height ────────────────────────────────────────────────────────────────
 
     def _total_height(self, n: int) -> int:
-        return 80 + 56 + 36 + n * self.ROW_H + 24
+        return 80 + 68 + 36 + n * self.ROW_H + 24
 
     # ── Column geometry ───────────────────────────────────────────────────────
 
@@ -538,17 +538,18 @@ class BatchCardRenderer:
     # ── Pill row (verdict counts) ─────────────────────────────────────────────
 
     def _draw_pills(self, ctx, data: BatchCardData, y0: int) -> int:
-        h      = 56
+        h      = 68
         counts = data.counts
         pill_info = [
             (4, "МОЖНО"),
             (3, "ВЕРОЯТНО"),
             (2, "ОСТОРОЖНО"),
             (1, "НЕЛЬЗЯ"),
+            (0, "ДОЖДЬ"),
         ]
         inner_w  = self.WIDTH - self.H_PAD * 2
-        seg_w    = inner_w / 4
-        cy       = y0 + 28
+        seg_w    = inner_w / 5
+        cy       = y0 + 20
 
         for i, (level, label) in enumerate(pill_info):
             color   = self._level_color(level)
@@ -574,7 +575,7 @@ class BatchCardRenderer:
 
     def _draw_col_headers(self, ctx, data: BatchCardData, y0: int) -> int:
         h      = 36
-        ty     = y0 + h - 9
+        ty     = y0 + 15
         centers = self._col_centers()
 
         self._text(ctx, "Маршрут",
