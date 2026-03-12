@@ -48,7 +48,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
+ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes_test")
 
 VERDICT_LABELS = {
     0: "ДОЖДЬ",
