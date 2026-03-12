@@ -163,11 +163,16 @@ class RouteCardRenderer:
     # ── Section: header ───────────────────────────────────────────────────────
 
     def _draw_header(self, ctx, data: RouteCardData, y0: int) -> int:
-        h = 110
+        h = 80
 
         # Background stripe
         ctx.set_source_rgb(*self.BG)
         ctx.rectangle(0, y0, self.WIDTH, h)
+        ctx.fill()
+
+        # Accent stripe (verdict colour), same as batch card
+        ctx.set_source_rgb(*self.VERDICT_COLOR[data.verdict_level])
+        ctx.rectangle(0, y0, 5, h)
         ctx.fill()
 
         # Bottom separator
@@ -175,14 +180,14 @@ class RouteCardRenderer:
         ctx.rectangle(0, y0 + h - 1, self.WIDTH, 1)
         ctx.fill()
 
-        cx = self.WIDTH / 2
+        lx = 16 + 5 + 8   # stripe(5) + gap(8) + L_PAD(16) — mirrors batch card
         self._text(ctx, data.route_name,
-                   cx, y0 + 52, size=30, bold=True, align='center')
+                   lx, y0 + 42, size=24, bold=True)
 
         pts = f"{data.points_analyzed} из {data.points_sampled} точек" if data.points_sampled else ""
         subtitle = f"{data.length_km:.1f} km" + (f"  ·  {pts}" if pts else "")
         self._text(ctx, subtitle,
-                   cx, y0 + 82, size=18, align='center', color=self.GRAY)
+                   lx, y0 + 66, size=15, color=self.GRAY)
 
         return y0 + h
 
