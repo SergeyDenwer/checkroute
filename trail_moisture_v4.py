@@ -489,8 +489,10 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
             print(f"   [{idx+1}/{len(sampled)}] км {dist_km:.1f}: ({lat:.4f}, {lon:.4f})...", end=" ", flush=True)
         
         try:
+            surface = fetch_surface_type(lat, lon)
+            soil_params = apply_surface_modifiers(SOIL_PARAMS, surface)
             weather = fetch_weather_data(lat, lon, days_back=14)
-            state = simulate_moisture(weather, SOIL_PARAMS)
+            state = simulate_moisture(weather, soil_params)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
 
             results.append({
@@ -498,6 +500,7 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
                 "lon": lon,
                 "elevation": elev,
                 "distance_km": dist_km,
+                "surface": surface,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
                 "wet_index": state["wet_index"],
@@ -572,8 +575,8 @@ def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
                 "wet_index": point["wet_index"],
                 "snow_cover": point["snow_cover"],
             }
-            
-            forecast_results = simulate_forecast(initial_state, forecast, SOIL_PARAMS)
+            soil_params = apply_surface_modifiers(SOIL_PARAMS, point.get("surface", "ground"))
+            forecast_results = simulate_forecast(initial_state, forecast, soil_params)
             all_forecasts.append({
                 "point": point,
                 "forecast": forecast_results,
