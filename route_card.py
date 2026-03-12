@@ -181,8 +181,8 @@ class RouteCardRenderer:
         ctx.fill()
 
         lx = 16 + 5 + 8   # stripe(5) + gap(8) + L_PAD(16) — mirrors batch card
-        self._text(ctx, data.route_name,
-                   lx, y0 + 42, size=24, bold=True)
+        self._text(ctx, data.route_name.upper(),
+                   lx, y0 + 42, size=28, bold=True)
 
         pts = f"{data.points_analyzed} из {data.points_sampled} точек" if data.points_sampled else ""
         subtitle = f"{data.length_km:.1f} km" + (f"  ·  {pts}" if pts else "")
