@@ -198,6 +198,14 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
                 point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
                 state = simulate_moisture(weather, point_soil)
                 status_label, status_key = get_status(state["moisture"], state["capacity"])
+                logger.info(
+                    "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                    "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
+                    dist_km, surface,
+                    point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
+                    state["moisture"], state["capacity"], state["snow_cover"],
+                    status_key,
+                )
                 results.append({
                     "lat": lat, "lon": lon, "elevation": elev,
                     "distance_km": dist_km,
@@ -326,6 +334,14 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
+            logger.info(
+                "batch point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
+                dist_km, surface,
+                point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
+                state["moisture"], state["capacity"], state["snow_cover"],
+                status_key,
+            )
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
