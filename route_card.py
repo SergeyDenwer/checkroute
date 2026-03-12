@@ -508,7 +508,7 @@ class BatchCardRenderer:
     # ── Height ────────────────────────────────────────────────────────────────
 
     def _total_height(self, n: int) -> int:
-        return 80 + 68 + 36 + n * self.ROW_H + 24
+        return 80 + 64 + 32 + n * self.ROW_H + 24
 
     # ── Column geometry ───────────────────────────────────────────────────────
 
@@ -538,7 +538,7 @@ class BatchCardRenderer:
     # ── Pill row (verdict counts) ─────────────────────────────────────────────
 
     def _draw_pills(self, ctx, data: BatchCardData, y0: int) -> int:
-        h      = 68
+        h      = 64
         counts = data.counts
         pill_info = [
             (4, "МОЖНО"),
@@ -574,7 +574,7 @@ class BatchCardRenderer:
     # ── Column headers ────────────────────────────────────────────────────────
 
     def _draw_col_headers(self, ctx, data: BatchCardData, y0: int) -> int:
-        h      = 36
+        h      = 32
         ty     = y0 + 19
         centers = self._col_centers()
 
