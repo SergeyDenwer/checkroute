@@ -448,6 +448,7 @@ class BatchCardRenderer:
 
     WIDTH   = 540
     H_PAD   = 0
+    L_PAD   = 16   # left indent for content (dots, text); dividers stay edge-to-edge
     ROW_H   = 44
 
     BG      : Color = (0.04,  0.04,  0.04)
@@ -523,8 +524,15 @@ class BatchCardRenderer:
 
     def _draw_header(self, ctx, data: BatchCardData, y0: int) -> int:
         h  = 80
-        lx = 16
 
+        # Coloured accent stripe: 5 px wide, dominant verdict level
+        counts = data.counts
+        dominant_level = max(counts, key=lambda k: counts[k])
+        ctx.set_source_rgb(*self._level_color(dominant_level))
+        ctx.rectangle(0, y0, 5, h)
+        ctx.fill()
+
+        lx = self.L_PAD + 5 + 8   # stripe(5) + gap(8)
         self._text(ctx, "СВОДКА МАРШРУТОВ",
                    lx, y0 + 42, size=24, bold=True)
 
@@ -579,7 +587,7 @@ class BatchCardRenderer:
         centers = self._col_centers()
 
         self._text(ctx, "Маршрут",
-                   self.H_PAD + 20, ty, size=13, color=self.GRAY)
+                   self.L_PAD + 20, ty, size=13, color=self.GRAY)
 
         for cx, label in zip(centers, ["Сегодня", "Завтра", data.col3_label, data.col4_label]):
             self._text(ctx, label, cx, ty, size=13, align='center', color=self.GRAY)
@@ -603,14 +611,14 @@ class BatchCardRenderer:
 
             # Verdict dot
             ctx.set_source_rgb(*self._level_color(route.today_level))
-            ctx.arc(self.H_PAD + 10, mid_y, 6, 0, 2 * math.pi)
+            ctx.arc(self.L_PAD + 10, mid_y, 6, 0, 2 * math.pi)
             ctx.fill()
 
             # Route name
             name = route.name
             if len(name) > 18:
                 name = name[:17] + "…"
-            self._text(ctx, name, self.H_PAD + 22, mid_y + 6, size=14, bold=True)
+            self._text(ctx, name, self.L_PAD + 22, mid_y + 6, size=14, bold=True)
 
             # Mini bars (fill = 100 - ci, so fuller = better)
             days = [
