@@ -197,13 +197,14 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
                 weather = fetch_weather_data(lat, lon, days_back=14)
                 point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
                 state = simulate_moisture(weather, point_soil)
-                status_label, status_key = get_status(state["moisture"], state["capacity"])
+                rideability_mult = point_soil.get("rideability_mult", 1.0)
+                status_label, status_key = get_status(state["moisture"], state["capacity"] * rideability_mult)
                 logger.info(
-                    "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                    "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f ride_mult=%.1f "
                     "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
                     dist_km, surface,
                     point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
-                    state["moisture"], state["capacity"], state["snow_cover"],
+                    rideability_mult, state["moisture"], state["capacity"], state["snow_cover"],
                     status_key,
                 )
                 results.append({
@@ -211,6 +212,7 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
                     "distance_km": dist_km,
                     "moisture": state["moisture"],
                     "capacity": state["capacity"],
+                    "rideability_mult": rideability_mult,
                     "wet_index": state["wet_index"],
                     "snow_cover": state["snow_cover"],
                     "surface": surface,
@@ -333,13 +335,14 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
             state = simulate_moisture(weather, point_soil)
-            status_label, status_key = get_status(state["moisture"], state["capacity"])
+            rideability_mult = point_soil.get("rideability_mult", 1.0)
+            status_label, status_key = get_status(state["moisture"], state["capacity"] * rideability_mult)
             logger.info(
-                "batch point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                "batch point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f ride_mult=%.1f "
                 "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
                 dist_km, surface,
                 point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
-                state["moisture"], state["capacity"], state["snow_cover"],
+                rideability_mult, state["moisture"], state["capacity"], state["snow_cover"],
                 status_key,
             )
             results.append({
@@ -347,6 +350,7 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
                 "distance_km": dist_km,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
+                "rideability_mult": rideability_mult,
                 "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
                 "surface": surface,
