@@ -447,7 +447,7 @@ class BatchCardRenderer:
     """
 
     WIDTH   = 540
-    H_PAD   = 20
+    H_PAD   = 0
     ROW_H   = 44
 
     BG      : Color = (0.04,  0.04,  0.04)
@@ -523,14 +523,14 @@ class BatchCardRenderer:
 
     def _draw_header(self, ctx, data: BatchCardData, y0: int) -> int:
         h  = 80
-        cx = self.WIDTH / 2
+        lx = 16
 
         self._text(ctx, "СВОДКА МАРШРУТОВ",
-                   cx, y0 + 42, size=24, bold=True, align='center')
+                   lx, y0 + 42, size=24, bold=True)
 
         subtitle = f"{data.date_str}  ·  {len(data.routes)} маршрутов"
         self._text(ctx, subtitle,
-                   cx, y0 + 66, size=15, align='center', color=self.GRAY)
+                   lx, y0 + 66, size=15, color=self.GRAY)
 
         self._divider(ctx, y0 + h - 1)
         return y0 + h
