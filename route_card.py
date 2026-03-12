@@ -549,7 +549,7 @@ class BatchCardRenderer:
         ]
         inner_w  = self.WIDTH - self.H_PAD * 2
         seg_w    = inner_w / 5
-        cy       = y0 + 20
+        cy       = y0 + 24
 
         for i, (level, label) in enumerate(pill_info):
             color   = self._level_color(level)
@@ -575,7 +575,7 @@ class BatchCardRenderer:
 
     def _draw_col_headers(self, ctx, data: BatchCardData, y0: int) -> int:
         h      = 36
-        ty     = y0 + 15
+        ty     = y0 + 19
         centers = self._col_centers()
 
         self._text(ctx, "Маршрут",
