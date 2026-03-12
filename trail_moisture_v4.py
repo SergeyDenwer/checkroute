@@ -192,6 +192,8 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
     DESORPTIVITY = soil_params["desorptivity"]
     CAPACITY = soil_params["capacity"]
     STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
+    # snow_factor < 1 для быстродренирующих поверхностей: снег стекает, не блокируя испарение
+    SNOW_FACTOR = soil_params.get("snow_factor", 1.0)
 
     snowfall_mm = snowfall_cm * 10
     water_input = rain
@@ -209,7 +211,7 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
     rain_signal = water_input / (water_input + 5.0) if water_input > 0 else 0.0
     wet_index = min(1.0, wet_index * 0.85 + rain_signal)
 
-    if snow_cover > 5:
+    if snow_cover * SNOW_FACTOR > 5:
         evaporation = 0.05
     elif surface_moisture > STAGE1_THRESHOLD:
         evaporation = eto * 0.9
@@ -288,21 +290,22 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 
 
 # Как OSM surface влияет на физику симуляции:
-# capacity_mult  — насколько точка держит воду (гравий дренирует, глина держит)
+# capacity_mult     — насколько точка держит воду (гравий дренирует, глина держит)
 # desorptivity_mult — насколько быстро сохнет в Stage 2
+# snow_factor       — доля snow_cover, блокирующая испарение (0.3 = снег стекает с гравия/камней)
 SURFACE_SOIL_MODIFIERS = {
-    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
-    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
-    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 3.0},
-    "gravel":       {"capacity_mult": 0.55, "desorptivity_mult": 1.6},
-    "fine_gravel":  {"capacity_mult": 0.60, "desorptivity_mult": 1.5},
-    "compacted":    {"capacity_mult": 0.65, "desorptivity_mult": 1.4},
-    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
-    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
-    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0},
-    "grass":        {"capacity_mult": 1.15, "desorptivity_mult": 0.85},
-    "sand":         {"capacity_mult": 0.80, "desorptivity_mult": 1.3},
-    "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65},
+    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
+    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
+    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 3.0,  "snow_factor": 0.1},
+    "gravel":       {"capacity_mult": 0.55, "desorptivity_mult": 1.6,  "snow_factor": 0.3},
+    "fine_gravel":  {"capacity_mult": 0.60, "desorptivity_mult": 1.5,  "snow_factor": 0.3},
+    "compacted":    {"capacity_mult": 0.65, "desorptivity_mult": 1.4,  "snow_factor": 0.6},
+    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
+    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
+    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 1.0},
+    "grass":        {"capacity_mult": 1.15, "desorptivity_mult": 0.85, "snow_factor": 1.0},
+    "sand":         {"capacity_mult": 0.80, "desorptivity_mult": 1.3,  "snow_factor": 0.5},
+    "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65, "snow_factor": 1.0},
 }
 
 
@@ -422,11 +425,12 @@ def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
     Возвращает копию soil_params, скорректированную под тип покрытия.
     SOIL (геология) остаётся базой, surface (конструкция тропы) уточняет физику.
     """
-    mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0})
+    mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0, "snow_factor": 1.0})
     return {
         **soil_params,
         "capacity":     soil_params["capacity"]     * mods["capacity_mult"],
         "desorptivity": soil_params["desorptivity"] * mods["desorptivity_mult"],
+        "snow_factor":  mods.get("snow_factor", 1.0),
     }
 
 
