@@ -515,8 +515,8 @@ class BatchCardRenderer:
 
     def _col_centers(self) -> List[float]:
         """X centers for the 4 data columns (Сегодня / Завтра / Суббота / Воскресенье)."""
-        name_end  = self.H_PAD + 180
-        right_end = self.WIDTH - self.H_PAD
+        name_end  = self.L_PAD + 180
+        right_end = self.WIDTH - self.L_PAD
         col_w     = (right_end - name_end) / 4
         return [name_end + col_w * (i + 0.5) for i in range(4)]
 
@@ -555,14 +555,14 @@ class BatchCardRenderer:
             (1, "НЕЛЬЗЯ"),
             (0, "ДОЖДЬ"),
         ]
-        inner_w  = self.WIDTH - self.H_PAD * 2
+        inner_w  = self.WIDTH - self.L_PAD * 2
         seg_w    = inner_w / 5
         cy       = y0 + 24
 
         for i, (level, label) in enumerate(pill_info):
             color   = self._level_color(level)
             count   = counts.get(level, 0)
-            seg_cx  = self.H_PAD + seg_w * (i + 0.5)
+            seg_cx  = self.L_PAD + seg_w * (i + 0.5)
 
             # Dot + number horizontally centred together
             dot_x = seg_cx - 16
