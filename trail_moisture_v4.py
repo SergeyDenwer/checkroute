@@ -306,20 +306,21 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 # rideability_mult  — множитель capacity при определении статуса рейдабилити
 #                     gravel: физически насыщен (moisture=capacity) ≠ "месиво";
 #                     вода стекает насквозь, поверхность остаётся проходимой.
-#                     gravel rideability_mult=2.0: moisture/capacity=1.0 → effective=0.50 → "грязь"
-#                     gravel rideability_mult=2.0: moisture/capacity=0.5 → effective=0.25 → "влажно"
+#                     gravel rideability_mult=1.5: moisture/capacity=1.0 → effective=0.67 → "грязь"
+#                     gravel rideability_mult=1.5: moisture/capacity=0.75 → effective=0.50 → "грязь"
+#                     gravel rideability_mult=1.5: moisture/capacity=0.5 → effective=0.33 → "влажно"
 SURFACE_SOIL_MODIFIERS = {
     "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
     "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
     "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
-    "gravel":       {"capacity_mult": 0.15, "desorptivity_mult": 4.5,  "snow_factor": 0.25, "rideability_mult": 2.0},
-    "fine_gravel":  {"capacity_mult": 0.20, "desorptivity_mult": 3.5,  "snow_factor": 0.25, "rideability_mult": 1.8},
-    "compacted":    {"capacity_mult": 0.55, "desorptivity_mult": 1.4,  "snow_factor": 0.45, "rideability_mult": 1.3},
+    "gravel":       {"capacity_mult": 0.15, "desorptivity_mult": 4.5,  "snow_factor": 0.25, "rideability_mult": 1.5},
+    "fine_gravel":  {"capacity_mult": 0.20, "desorptivity_mult": 3.5,  "snow_factor": 0.25, "rideability_mult": 1.3},
+    "compacted":    {"capacity_mult": 0.55, "desorptivity_mult": 1.4,  "snow_factor": 0.45, "rideability_mult": 1.15},
     "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
     "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
     "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
     "grass":        {"capacity_mult": 1.10, "desorptivity_mult": 0.85, "snow_factor": 1.0,  "rideability_mult": 1.0},
-    "sand":         {"capacity_mult": 0.40, "desorptivity_mult": 3.0,  "snow_factor": 0.65, "rideability_mult": 1.5},
+    "sand":         {"capacity_mult": 0.40, "desorptivity_mult": 3.0,  "snow_factor": 0.65, "rideability_mult": 1.2},
     "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65, "snow_factor": 1.0,  "rideability_mult": 1.0},
 }
 
