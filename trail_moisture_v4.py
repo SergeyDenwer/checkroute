@@ -607,10 +607,6 @@ def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
     if not all_forecasts:
         return None
     
-    # Агрегируем: для каждого дня считаем средний % сухих точек
-    capacity = all_forecasts[0]["point"]["capacity"]
-    dry_threshold = capacity * 0.20
-    
     # Собираем по датам
     dates = [f["forecast"][0]["date"] for f in all_forecasts if f["forecast"]]
     if not dates:
