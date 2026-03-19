@@ -570,10 +570,10 @@ def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
     if not valid:
         return None
     
-    # Берём равномерно распределённые точки (максимум max_forecast_points)
+    # Берём худшие точки (по moisture/capacity) — они определяют когда трейл станет проезжим
     num_points = min(max_forecast_points, len(valid))
-    step = max(1, len(valid) // num_points)
-    forecast_points = valid[::step][:num_points]  # ограничиваем сверху
+    sorted_by_worst = sorted(valid, key=lambda r: r["moisture"] / max(r["capacity"], 0.01), reverse=True)
+    forecast_points = sorted_by_worst[:num_points]
     
     if verbose:
         print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
