@@ -260,6 +260,9 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
         transitions = []
 
         for ds in forecast_info["daily_stats"]:
+            ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
+            if ds_date == today:
+                continue  # сегодня уже показан как текущий статус — не дублируем в прогнозе
             if ds.get("avg_rain", 0) >= RAIN_DAY_MM:
                 level = 0  # ДОЖДЬ — симуляция на этот день бессмысленна
             else:
@@ -381,7 +384,7 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     saturday_level = today_level
     sunday_ci      = today_ci
     sunday_level   = today_level
-    forecast_info = forecast_trail_drying(results, max_forecast_points=5, verbose=False)
+    forecast_info = forecast_trail_drying(results, max_forecast_points=10, verbose=False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()

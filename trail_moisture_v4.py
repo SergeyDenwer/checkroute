@@ -196,13 +196,17 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
     # snow_factor < 1 для быстродренирующих поверхностей: снег стекает, не блокируя испарение
     SNOW_FACTOR = soil_params.get("snow_factor", 1.0)
 
+    # Open-Meteo snowfall_sum в cm снежного покрова (глубина, ~1мм воды = 1 см снега)
+    # × 10 → мм снежного покрова; × 0.1 → мм SWE (плотность снега ~10%, стандарт)
     snowfall_mm = snowfall_cm * 10
     water_input = rain
 
     snow_cover += snowfall_mm
     if temp_mean > 0 and snow_cover > 0:
+        # Degree-day factor 3.0 мм/°С/день — нижний край для лесных трейлов
+        # Источник: Rango & Martinec (1995); диапазон 1.5–3.5 для леса, 4–8 для открытых склонов
         melt_potential = temp_mean * 3.0
-        snow_water = snow_cover * 0.1
+        snow_water = snow_cover * 0.1   # SWE = 10% от глубины снега
         actual_melt = min(snow_water, melt_potential)
         snow_cover -= actual_melt * 10
         snow_cover = max(0, snow_cover)
@@ -306,9 +310,10 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 # rideability_mult  — множитель capacity при определении статуса рейдабилити
 #                     gravel: физически насыщен (moisture=capacity) ≠ "месиво";
 #                     вода стекает насквозь, поверхность остаётся проходимой.
-#                     gravel rideability_mult=1.5: moisture/capacity=1.0 → effective=0.67 → "грязь"
-#                     gravel rideability_mult=1.5: moisture/capacity=0.75 → effective=0.50 → "грязь"
-#                     gravel rideability_mult=1.5: moisture/capacity=0.5 → effective=0.33 → "влажно"
+#                     gravel rideability_mult=1.2: moisture/capacity=1.0 → effective=0.83 → "месиво"
+#                     gravel rideability_mult=1.2: moisture/capacity=0.75 → effective=0.63 → "грязь"
+#                     gravel rideability_mult=1.2: moisture/capacity=0.5 → effective=0.42 → "влажно"
+#                     Источник: Boulder MBA + ScienceDirect trail damage studies (VWC threshold ~25%)
 SURFACE_SOIL_MODIFIERS = {
     "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
     "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
@@ -566,10 +571,10 @@ def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
     if not valid:
         return None
     
-    # Берём равномерно распределённые точки (максимум max_forecast_points)
+    # Берём худшие точки (по moisture/capacity) — они определяют когда трейл станет проезжим
     num_points = min(max_forecast_points, len(valid))
-    step = max(1, len(valid) // num_points)
-    forecast_points = valid[::step][:num_points]  # ограничиваем сверху
+    sorted_by_worst = sorted(valid, key=lambda r: r["moisture"] / max(r["capacity"], 0.01), reverse=True)
+    forecast_points = sorted_by_worst[:num_points]
     
     if verbose:
         print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
@@ -602,10 +607,6 @@ def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
     
     if not all_forecasts:
         return None
-    
-    # Агрегируем: для каждого дня считаем средний % сухих точек
-    capacity = all_forecasts[0]["point"]["capacity"]
-    dry_threshold = capacity * 0.20
     
     # Собираем по датам
     dates = [f["forecast"][0]["date"] for f in all_forecasts if f["forecast"]]
