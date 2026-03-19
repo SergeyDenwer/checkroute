@@ -562,19 +562,16 @@ def aggregate_status(results):
     return percentages
 
 
-def forecast_trail_drying(results, max_forecast_points=10, verbose=True):
+def forecast_trail_drying(results, verbose=True):
     """
     Прогноз когда трейл станет сухим.
-    Берём равномерно распределённые точки, симулируем высыхание, усредняем.
+    Используем все non-paved точки — те же что для текущего статуса.
     """
     valid = [r for r in results if "moisture" in r]
     if not valid:
         return None
-    
-    # Берём худшие точки (по moisture/capacity) — они определяют когда трейл станет проезжим
-    num_points = min(max_forecast_points, len(valid))
-    sorted_by_worst = sorted(valid, key=lambda r: r["moisture"] / max(r["capacity"], 0.01), reverse=True)
-    forecast_points = sorted_by_worst[:num_points]
+
+    forecast_points = valid
     
     if verbose:
         print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
