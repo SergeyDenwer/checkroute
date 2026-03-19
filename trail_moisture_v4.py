@@ -665,7 +665,6 @@ def forecast_trail_drying(results, verbose=True):
         "daily_stats": daily_stats,
         "rideable_date": rideable_date,  # 80% сухо+влажно
         "dry_date": dry_date,             # 80% сухо
-        "capacity": capacity,
     }
 
 
