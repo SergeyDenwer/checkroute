@@ -306,26 +306,19 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
 #                     = 1 − runoff_coeff (Rational Method / USDA TR-55)
 #                     gravel C≈0.7 → snow_factor≈0.25; bare soil C≈0.35 → snow_factor≈0.75
 #                     Источник: USDA TR-55 Table 2-2a, California Water Boards
-# rideability_mult  — множитель capacity при определении статуса рейдабилити
-#                     gravel: физически насыщен (moisture=capacity) ≠ "месиво";
-#                     вода стекает насквозь, поверхность остаётся проходимой.
-#                     gravel rideability_mult=1.2: moisture/capacity=1.0 → effective=0.83 → "месиво"
-#                     gravel rideability_mult=1.2: moisture/capacity=0.75 → effective=0.63 → "грязь"
-#                     gravel rideability_mult=1.2: moisture/capacity=0.5 → effective=0.42 → "влажно"
-#                     Источник: Boulder MBA + ScienceDirect trail damage studies (VWC threshold ~25%)
 SURFACE_SOIL_MODIFIERS = {
-    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
-    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
-    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1,  "rideability_mult": 1.0},
-    "gravel":       {"capacity_mult": 0.15, "desorptivity_mult": 4.5,  "snow_factor": 0.25, "rideability_mult": 1.2},
-    "fine_gravel":  {"capacity_mult": 0.20, "desorptivity_mult": 3.5,  "snow_factor": 0.25, "rideability_mult": 1.1},
-    "compacted":    {"capacity_mult": 0.55, "desorptivity_mult": 1.4,  "snow_factor": 0.45, "rideability_mult": 1.05},
-    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
-    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
-    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75, "rideability_mult": 1.0},
-    "grass":        {"capacity_mult": 1.10, "desorptivity_mult": 0.85, "snow_factor": 1.0,  "rideability_mult": 1.0},
-    "sand":         {"capacity_mult": 0.40, "desorptivity_mult": 3.0,  "snow_factor": 0.65, "rideability_mult": 1.05},
-    "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65, "snow_factor": 1.0,  "rideability_mult": 1.0},
+    "asphalt":      {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "paved":        {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "concrete":     {"capacity_mult": 0.15, "desorptivity_mult": 4.0,  "snow_factor": 0.1},
+    "gravel":       {"capacity_mult": 0.15, "desorptivity_mult": 4.5,  "snow_factor": 0.25},
+    "fine_gravel":  {"capacity_mult": 0.20, "desorptivity_mult": 3.5,  "snow_factor": 0.25},
+    "compacted":    {"capacity_mult": 0.55, "desorptivity_mult": 1.4,  "snow_factor": 0.45},
+    "dirt":         {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "ground":       {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "unpaved":      {"capacity_mult": 1.0,  "desorptivity_mult": 1.0,  "snow_factor": 0.75},
+    "grass":        {"capacity_mult": 1.10, "desorptivity_mult": 0.85, "snow_factor": 1.0},
+    "sand":         {"capacity_mult": 0.40, "desorptivity_mult": 3.0,  "snow_factor": 0.65},
+    "mud":          {"capacity_mult": 1.30, "desorptivity_mult": 0.65, "snow_factor": 1.0},
 }
 
 
@@ -445,13 +438,12 @@ def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
     Возвращает копию soil_params, скорректированную под тип покрытия.
     SOIL (геология) остаётся базой, surface (конструкция тропы) уточняет физику.
     """
-    mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0, "snow_factor": 1.0, "rideability_mult": 1.0})
+    mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0, "snow_factor": 1.0})
     return {
         **soil_params,
         "capacity":        soil_params["capacity"]     * mods["capacity_mult"],
         "desorptivity":    soil_params["desorptivity"] * mods["desorptivity_mult"],
         "snow_factor":     mods.get("snow_factor",     1.0),
-        "rideability_mult": mods.get("rideability_mult", 1.0),
     }
 
 
@@ -506,8 +498,7 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
             soil_params = apply_surface_modifiers(SOIL_PARAMS, surface)
             weather = fetch_weather_data(lat, lon, days_back=14)
             state = simulate_moisture(weather, soil_params)
-            rideability_mult = soil_params.get("rideability_mult", 1.0)
-            status_label, status_key = get_status(state["moisture"], state["capacity"] * rideability_mult)
+            status_label, status_key = get_status(state["moisture"], state["capacity"])
 
             results.append({
                 "lat": lat,
@@ -517,7 +508,6 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
                 "surface": surface,
                 "moisture": state["moisture"],
                 "capacity": state["capacity"],
-                "rideability_mult": rideability_mult,
                 "wet_index": state["wet_index"],
                 "snow_cover": state["snow_cover"],
                 "status_label": status_label,
@@ -629,7 +619,7 @@ def forecast_trail_drying(results, verbose=True):
                 total_moisture += m
                 total_rain += f["forecast"][day_idx].get("rain", 0)
 
-                _, status_key = get_status(m, c * f["point"].get("rideability_mult", 1.0))
+                _, status_key = get_status(m, c)
                 if status_key == "dry":
                     dry_count += 1
                 elif status_key == "wet":
