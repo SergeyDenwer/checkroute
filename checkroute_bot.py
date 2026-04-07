@@ -11,6 +11,7 @@ CheckRoute — Telegram бот для проверки состояния мар
 
 import asyncio
 import json
+import math
 import os
 import logging
 import tempfile
@@ -28,9 +29,12 @@ from route_card import (
 from trail_moisture_v4 import (
     parse_gpx,
     sample_points_by_distance,
+    compute_point_slopes,
     fetch_weather_data,
-    fetch_surface_type,
+    fetch_terrain_info,
     apply_surface_modifiers,
+    apply_forest_modifiers,
+    apply_slope_modifier,
     simulate_moisture,
     get_status,
     aggregate_status,
@@ -161,6 +165,7 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     )
 
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
+    slopes  = compute_point_slopes(points, sampled)
 
     header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
     total = len(sampled)
@@ -186,7 +191,12 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
-            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
+            terrain = await asyncio.to_thread(fetch_terrain_info, lat, lon)
+            surface   = terrain["surface"]
+            is_forest = terrain["is_forest"]
+            leaf_type = terrain["leaf_type"]
+            slope_rad = slopes[idx]
+
             if surface == "error":
                 skipped_paved += 1
                 progress_lines.append(f"  км {dist_km:.1f} — ⚠️ нет данных OSM")
@@ -196,28 +206,41 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
             if surface not in PAVED_SURFACES and surface != "error":
                 weather = fetch_weather_data(lat, lon, days_back=14)
                 point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
+                point_soil = apply_forest_modifiers(point_soil, is_forest, leaf_type)
+                point_soil = apply_slope_modifier(point_soil, slope_rad)
                 state = simulate_moisture(weather, point_soil)
                 status_label, status_key = get_status(state["moisture"], state["capacity"])
+                forest_mark = "🌲" if is_forest else ""
                 logger.info(
-                    "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
-                    "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
-                    dist_km, surface,
-                    point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
+                    "point km=%.1f surface=%s forest=%s leaf=%s slope=%.1f° "
+                    "cap=%.2f desorpt=%.2f snow_f=%.2f rain_f=%.2f "
+                    "moisture=%.2f capacity=%.2f snow_cover=%.1f stage2=%d → %s",
+                    dist_km, surface, is_forest, leaf_type,
+                    math.degrees(slope_rad),
+                    point_soil["capacity"], point_soil["desorptivity"],
+                    point_soil["snow_factor"], point_soil.get("rain_factor", 1.0),
                     state["moisture"], state["capacity"], state["snow_cover"],
-                    status_key,
+                    state.get("stage2_days", 0), status_key,
                 )
                 results.append({
                     "lat": lat, "lon": lon, "elevation": elev,
                     "distance_km": dist_km,
-                    "moisture": state["moisture"],
-                    "capacity": state["capacity"],
-                    "wet_index": state["wet_index"],
-                    "snow_cover": state["snow_cover"],
-                    "surface": surface,
+                    "moisture":    state["moisture"],
+                    "capacity":    state["capacity"],
+                    "wet_index":   state["wet_index"],
+                    "snow_cover":  state["snow_cover"],
+                    "stage2_days": state.get("stage2_days", 0),
+                    "surface":     surface,
+                    "is_forest":   is_forest,
+                    "leaf_type":   leaf_type,
+                    "slope_rad":   slope_rad,
                     "status_label": status_label,
-                    "status_key": status_key,
+                    "status_key":   status_key,
                 })
-                progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} → {status_label}")
+                progress_lines.append(
+                    f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface}"
+                    f"{forest_mark} → {status_label}"
+                )
         except Exception as e:
             errors += 1
             logger.warning(f"Point {idx} error: {e}")
@@ -316,6 +339,7 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
         for i in range(1, len(points))
     )
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
+    slopes  = compute_point_slopes(points, sampled)
     total = len(sampled)
 
     # Текущее состояние по каждой точке
@@ -324,7 +348,12 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
         surface = None
         status_label = None
         try:
-            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
+            terrain = await asyncio.to_thread(fetch_terrain_info, lat, lon)
+            surface   = terrain["surface"]
+            is_forest = terrain["is_forest"]
+            leaf_type = terrain["leaf_type"]
+            slope_rad = slopes[idx]
+
             if surface == "error":
                 if on_progress:
                     await on_progress(idx + 1, total, dist_km, "error", None)
@@ -335,26 +364,31 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
                 continue
             weather = fetch_weather_data(lat, lon, days_back=14)
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
+            point_soil = apply_forest_modifiers(point_soil, is_forest, leaf_type)
+            point_soil = apply_slope_modifier(point_soil, slope_rad)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             logger.info(
-                "batch point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
-                "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
-                dist_km, surface,
-                point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
-                state["moisture"], state["capacity"], state["snow_cover"],
-                status_key,
+                "batch point km=%.1f surface=%s forest=%s slope=%.1f° "
+                "cap=%.2f desorpt=%.2f moisture=%.2f capacity=%.2f → %s",
+                dist_km, surface, is_forest, math.degrees(slope_rad),
+                point_soil["capacity"], point_soil["desorptivity"],
+                state["moisture"], state["capacity"], status_key,
             )
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
-                "moisture": state["moisture"],
-                "capacity": state["capacity"],
-                "wet_index": state["wet_index"],
-                "snow_cover": state["snow_cover"],
-                "surface": surface,
+                "moisture":    state["moisture"],
+                "capacity":    state["capacity"],
+                "wet_index":   state["wet_index"],
+                "snow_cover":  state["snow_cover"],
+                "stage2_days": state.get("stage2_days", 0),
+                "surface":     surface,
+                "is_forest":   is_forest,
+                "leaf_type":   leaf_type,
+                "slope_rad":   slope_rad,
                 "status_label": status_label,
-                "status_key": status_key,
+                "status_key":   status_key,
             })
         except Exception:
             pass

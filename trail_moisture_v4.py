@@ -45,6 +45,25 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 
+def clear_sky_radiation(lat_deg: float, day_of_year: int) -> float:
+    """Ожидаемая ясная радиация МДж/м²/день (FAO Ra × 0.75).
+    Используется как базовая линия для нормализации реальной радиации.
+    Источник: FAO Irrigation and Drainage Paper 56, глава 3.
+    """
+    lat = math.radians(lat_deg)
+    dr = 1 + 0.033 * math.cos(2 * math.pi * day_of_year / 365)
+    d = 0.409 * math.sin(2 * math.pi * day_of_year / 365 - 1.39)
+    arg = -math.tan(lat) * math.tan(d)
+    if arg > 1:
+        return 0.1   # полярная ночь — минимум
+    ws = math.pi if arg < -1 else math.acos(arg)  # полночное солнце
+    Ra = (24 * 60 / math.pi) * 0.0820 * dr * (
+        ws * math.sin(lat) * math.sin(d) +
+        math.cos(lat) * math.cos(d) * math.sin(ws)
+    )
+    return max(0.1, Ra * 0.75)  # ясное небо ≈ 75% от экзатмосферной
+
+
 def parse_gpx(gpx_file):
     """Парсим GPX файл, возвращаем список точек [(lat, lon, elevation), ...]"""
     with open(gpx_file, 'r') as f:
@@ -115,6 +134,44 @@ def sample_points_by_distance(points, sample_km=5.0):
     return sampled
 
 
+def compute_point_slopes(raw_points, sampled, window_km=0.5):
+    """Угол уклона (радианы) для каждой сэмплированной точки.
+    Считает перепад высот в окне ±window_km по треку.
+    Возвращает список float той же длины что sampled.
+    """
+    if not raw_points:
+        return [0.0] * len(sampled)
+
+    # Аннотируем raw_points накопленными расстояниями
+    cum_dists = [0.0]
+    for i in range(1, len(raw_points)):
+        cum_dists.append(
+            cum_dists[-1] + haversine_distance(
+                raw_points[i-1][0], raw_points[i-1][1],
+                raw_points[i][0], raw_points[i][1],
+            )
+        )
+
+    slopes = []
+    for _, _, _, dist_km in sampled:
+        lo, hi = dist_km - window_km, dist_km + window_km
+        window_pts = [
+            (raw_points[i][2], cum_dists[i])
+            for i in range(len(raw_points))
+            if lo <= cum_dists[i] <= hi
+            and raw_points[i][2] is not None
+            and raw_points[i][2] > 0
+        ]
+        if len(window_pts) < 2:
+            slopes.append(0.0)
+            continue
+        elevs = [p[0] for p in window_pts]
+        horiz_m = (window_pts[-1][1] - window_pts[0][1]) * 1000.0
+        elev_diff = max(elevs) - min(elevs)
+        slopes.append(math.atan(elev_diff / horiz_m) if horiz_m >= 1.0 else 0.0)
+    return slopes
+
+
 # Покрытия, которые не имеют смысла анализировать (грязи там нет)
 PAVED_SURFACES = {"asphalt", "paved", "concrete", "sett"}
 
@@ -150,10 +207,12 @@ def fetch_weather_data(lat, lon, days_back=14):
             "rain_sum",
             "snowfall_sum",
             "et0_fao_evapotranspiration",
+            "shortwave_radiation_sum",
+            "wind_speed_10m_mean",
         ]),
         "timezone": "auto"
     }
-    
+
     response = requests.get(url, params=params, timeout=15)
     if response.status_code != 200:
         raise Exception(f"API Error: {response.status_code}")
@@ -172,6 +231,8 @@ def fetch_forecast(lat, lon, days_ahead=16):
             "rain_sum",
             "snowfall_sum",
             "et0_fao_evapotranspiration",
+            "shortwave_radiation_sum",
+            "wind_speed_10m_mean",
         ]),
         "forecast_days": days_ahead,
         "timezone": "auto"
@@ -183,23 +244,28 @@ def fetch_forecast(lat, lon, days_ahead=16):
     return response.json()
 
 
-def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index, soil_params):
+def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index,
+                  stage2_days, soil_params, radiation=0.0, expected_radiation=1.0, wind_speed=0.0):
     """Один шаг симуляции влажности (один день).
 
-    wet_index ∈ [0, 1] — экспоненциальная память о последних дождях.
-    0 = давно сухо, 1 = только что сильный дождь.
-    Заменяет бинарный days_since_rain.
+    stage2_days — реальный счётчик суток в Stage 2 с момента последнего промокания.
+    wet_index   — экспоненциальная память о дождях (остаётся для rain_signal логики).
+    radiation   — реальная радиация МДж/м²/день (shortwave_radiation_sum от Open-Meteo).
+    expected_radiation — ясная радиация для этой широты/даты (FAO clear-sky Ra×0.75).
+    wind_speed  — средняя скорость ветра м/с (wind_speed_10m_mean).
     """
     DESORPTIVITY = soil_params["desorptivity"]
     CAPACITY = soil_params["capacity"]
     STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
     # snow_factor < 1 для быстродренирующих поверхностей: снег стекает, не блокируя испарение
     SNOW_FACTOR = soil_params.get("snow_factor", 1.0)
+    # rain_factor < 1 для леса: часть осадков перехватывается кронами
+    RAIN_FACTOR = soil_params.get("rain_factor", 1.0)
 
     # Open-Meteo snowfall_sum в cm снежного покрова (глубина, ~1мм воды = 1 см снега)
     # × 10 → мм снежного покрова; × 0.1 → мм SWE (плотность снега ~10%, стандарт)
     snowfall_mm = snowfall_cm * 10
-    water_input = rain
+    water_input = rain * RAIN_FACTOR
 
     snow_cover += snowfall_mm
     if temp_mean > 0 and snow_cover > 0:
@@ -220,21 +286,40 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
 
     if snow_cover * SNOW_FACTOR > 5:
         evaporation = 0.05
+        stage2_days = 0  # под снегом счётчик сушки не идёт
     elif surface_moisture > STAGE1_THRESHOLD:
-        evaporation = eto * 0.9
+        # Stage 1: свободное испарение, лимитировано энергией.
+        # Поправка через реальную радиацию: северный/затенённый склон получает меньше
+        # солнца чем горизонтальная поверхность, для которой рассчитан ETO.
+        if expected_radiation > 0:
+            rad_factor = max(0.3, min(1.4, radiation / expected_radiation))
+        else:
+            rad_factor = 1.0
+        # Ветер свыше ~3 м/с ускоряет испарение (сдувает насыщенный пограничный слой),
+        # ниже 3 м/с — чуть замедляет. ETO уже включает ветер для ref-поверхности,
+        # здесь корректируем дополнительное влияние открытости рельефа.
+        # Источник: Allen et al. (1998) FAO-56, табл. коэффициентов Kc.
+        wind_factor = max(0.75, min(1.25, 1.0 + (wind_speed - 3.0) * 0.04))
+        evaporation = eto * 0.9 * rad_factor * wind_factor
+        stage2_days = 0  # в Stage 1 счётчик сбрасывается
     else:
-        # Stage 2: sorptivity formula; effective_t выводится из wet_index
-        # wet_index=1 → effective_t=1 (быстро сохнет после дождя)
-        # wet_index→0 → effective_t→большое (медленно после долгой сухости)
-        effective_t = max(1.0, 1.0 / max(0.01, wet_index))
-        str_factor = math.sqrt(effective_t) - math.sqrt(effective_t - 1)
+        # Stage 2: Philip's sorptivity formula с реальным счётчиком суток.
+        # dE(t) = S × (√t − √(t−1)), где S = DESORPTIVITY [мм/√день].
+        # Источник: Philip (1957), Leeds-Harrison et al. (1994).
+        stage2_days += 1
+        t = stage2_days
+        str_factor = math.sqrt(t) - math.sqrt(t - 1)
         evaporation = DESORPTIVITY * str_factor
 
     evaporation = min(evaporation, surface_moisture)
     surface_moisture = surface_moisture + water_input - evaporation
     surface_moisture = max(0, min(surface_moisture, CAPACITY))
 
-    return surface_moisture, snow_cover, wet_index
+    # Если вода вернула нас в Stage 1 — счётчик Stage 2 сбрасываем на старте следующего дня
+    if surface_moisture > STAGE1_THRESHOLD:
+        stage2_days = 0
+
+    return surface_moisture, snow_cover, wet_index, stage2_days
 
 
 def simulate_moisture(weather_data, soil_params):
@@ -243,9 +328,20 @@ def simulate_moisture(weather_data, soil_params):
     surface_moisture = 0.0
     snow_cover = 0.0
     wet_index = 0.0
+    stage2_days = 0
+
+    lat = weather_data.get("latitude", 45.0)
+    rads  = [r or 0.0 for r in daily.get("shortwave_radiation_sum", [])]
+    winds = [w or 0.0 for w in daily.get("wind_speed_10m_mean", [])]
 
     for i in range(len(daily["time"])):
-        surface_moisture, snow_cover, wet_index = _simulate_day(
+        try:
+            doy = datetime.strptime(daily["time"][i], "%Y-%m-%d").timetuple().tm_yday
+            expected_rad = clear_sky_radiation(lat, doy)
+        except Exception:
+            expected_rad = 1.0
+
+        surface_moisture, snow_cover, wet_index, stage2_days = _simulate_day(
             temp_mean=daily["temperature_2m_mean"][i] or 0,
             rain=daily["rain_sum"][i] or 0,
             snowfall_cm=daily["snowfall_sum"][i] or 0,
@@ -253,7 +349,11 @@ def simulate_moisture(weather_data, soil_params):
             surface_moisture=surface_moisture,
             snow_cover=snow_cover,
             wet_index=wet_index,
+            stage2_days=stage2_days,
             soil_params=soil_params,
+            radiation=rads[i] if i < len(rads) else 0.0,
+            expected_radiation=expected_rad,
+            wind_speed=winds[i] if i < len(winds) else 0.0,
         )
 
     return {
@@ -261,6 +361,7 @@ def simulate_moisture(weather_data, soil_params):
         "capacity": soil_params["capacity"],
         "wet_index": wet_index,
         "snow_cover": snow_cover,
+        "stage2_days": stage2_days,
     }
 
 
@@ -270,11 +371,22 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
     surface_moisture = initial_state["moisture"]
     snow_cover = initial_state.get("snow_cover", 0)
     wet_index = initial_state.get("wet_index", 0.0)
+    stage2_days = initial_state.get("stage2_days", 0)
+
+    lat = forecast_data.get("latitude", 45.0)
+    rads  = [r or 0.0 for r in daily.get("shortwave_radiation_sum", [])]
+    winds = [w or 0.0 for w in daily.get("wind_speed_10m_mean", [])]
     results = []
 
     for i in range(len(daily["time"])):
         temp_mean = ((daily["temperature_2m_max"][i] or 0) + (daily["temperature_2m_min"][i] or 0)) / 2
-        surface_moisture, snow_cover, wet_index = _simulate_day(
+        try:
+            doy = datetime.strptime(daily["time"][i], "%Y-%m-%d").timetuple().tm_yday
+            expected_rad = clear_sky_radiation(lat, doy)
+        except Exception:
+            expected_rad = 1.0
+
+        surface_moisture, snow_cover, wet_index, stage2_days = _simulate_day(
             temp_mean=temp_mean,
             rain=daily["rain_sum"][i] or 0,
             snowfall_cm=daily["snowfall_sum"][i] or 0,
@@ -282,7 +394,11 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
             surface_moisture=surface_moisture,
             snow_cover=snow_cover,
             wet_index=wet_index,
+            stage2_days=stage2_days,
             soil_params=soil_params,
+            radiation=rads[i] if i < len(rads) else 0.0,
+            expected_radiation=expected_rad,
+            wind_speed=winds[i] if i < len(winds) else 0.0,
         )
         results.append({
             "date": daily["time"][i],
@@ -291,6 +407,7 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
             "rain": daily["rain_sum"][i] or 0,
             "wet_index": wet_index,
             "snow_cover": snow_cover,
+            "stage2_days": stage2_days,
         })
 
     return results
@@ -370,68 +487,107 @@ def _overpass_wait_for_slot(timeout: int = 60) -> bool:
     return False
 
 
-def fetch_surface_type(lat: float, lon: float) -> str:
-    """
-    Тип покрытия OSM для точки.
-    Возвращает OSM surface tag, 'asphalt' для дорожных highway без surface тега,
-    'ground' если данных нет, 'error' если Overpass недоступен.
+def fetch_terrain_info(lat: float, lon: float) -> dict:
+    """Тип покрытия и наличие лесного полога для точки — один Overpass-запрос.
+
+    Возвращает:
+        {"surface": str, "is_forest": bool, "leaf_type": str}
+
+    surface:   OSM surface tag / 'asphalt' для дорожных highway / 'ground' по умолчанию / 'error'
+    is_forest: True если точка находится внутри natural=wood или landuse=forest полигона
+    leaf_type: 'needleleaved' | 'broadleaved' | 'mixed' | '' (из OSM leaf_type тега)
     """
     query = (
-        f"[out:json][timeout:10];"
-        f"way(around:30,{lat},{lon})"
-        f"[highway];"
+        f"[out:json][timeout:15];"
+        f"("
+        f"  way(around:30,{lat},{lon})[highway];"
+        f")->.ways;"
+        f"is_in({lat},{lon})->.a;"
+        f"("
+        f"  area.a[natural=wood];"
+        f"  area.a[landuse=forest];"
+        f")->.forests;"
+        f"(.ways;.forests;);"
         f"out tags;"
     )
-    # Ждём доступного слота перед запросом
+
+    result = {"surface": "ground", "is_forest": False, "leaf_type": ""}
+
     if not _overpass_wait_for_slot():
-        logger.warning("surface_type: Overpass no slot available at (%.5f, %.5f) → error", lat, lon)
-        return "error"
+        logger.warning("terrain_info: Overpass no slot at (%.5f, %.5f) → error", lat, lon)
+        result["surface"] = "error"
+        return result
+
     for attempt in range(3):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=15)
         except Exception as e:
-            logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
-            return "error"
+            logger.warning("terrain_info exception at (%.5f, %.5f): %s", lat, lon, e)
+            result["surface"] = "error"
+            return result
 
         if resp.status_code == 429:
-            # Слот пропал между проверкой и запросом — ждём и делаем ещё одну попытку
-            logger.warning("surface_type: unexpected 429 at (%.5f, %.5f), waiting for slot...", lat, lon)
+            logger.warning("terrain_info: unexpected 429 at (%.5f, %.5f), waiting for slot...", lat, lon)
             if not _overpass_wait_for_slot():
-                return "error"
-            continue  # повтор с тем же слотом
+                result["surface"] = "error"
+                return result
+            continue
 
         if resp.status_code in (503, 504):
-            # Сервер перегружен — короткая пауза и повтор
             wait = 5 * (attempt + 1)
-            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f), retry in %ds (attempt %d/3)",
+            logger.warning("terrain_info HTTP %s at (%.5f, %.5f), retry in %ds (attempt %d/3)",
                            resp.status_code, lat, lon, wait, attempt + 1)
             time.sleep(wait)
             continue
 
         if resp.status_code != 200:
-            logger.warning("surface_type OSM HTTP %s at (%.5f, %.5f) → error", resp.status_code, lat, lon)
-            return "error"
+            logger.warning("terrain_info HTTP %s at (%.5f, %.5f) → error", resp.status_code, lat, lon)
+            result["surface"] = "error"
+            return result
+
         elements = resp.json().get("elements", [])
-        if not elements:
-            logger.debug("surface_type no ways at (%.5f, %.5f) → ground", lat, lon)
-            return "ground"
-        logger.debug("surface_type (%.5f, %.5f) ways=%s", lat, lon,
-                     [(el["tags"].get("highway"), el["tags"].get("surface")) for el in elements])
+
+        # Проверяем лес — area-элементы с нужными тегами
         for el in elements:
+            tags = el.get("tags", {})
+            if tags.get("natural") == "wood" or tags.get("landuse") == "forest":
+                result["is_forest"] = True
+                result["leaf_type"] = tags.get("leaf_type", "")
+                logger.info("terrain_info (%.5f, %.5f) forest=True leaf_type=%s",
+                            lat, lon, result["leaf_type"])
+
+        # Определяем surface из highway ways
+        highway_els = [el for el in elements if "highway" in el.get("tags", {})]
+        if not highway_els:
+            logger.debug("terrain_info (%.5f, %.5f) no highway ways → ground", lat, lon)
+            return result
+
+        for el in highway_els:
             if "surface" in el.get("tags", {}):
-                result = el["tags"]["surface"]
-                logger.info("surface_type (%.5f, %.5f) surface_tag=%s", lat, lon, result)
+                result["surface"] = el["tags"]["surface"]
+                logger.info("terrain_info (%.5f, %.5f) surface=%s forest=%s",
+                            lat, lon, result["surface"], result["is_forest"])
                 return result
-        for el in elements:
+
+        for el in highway_els:
             hw = el.get("tags", {}).get("highway")
             if hw in _PAVED_HIGHWAY_TYPES:
-                logger.info("surface_type (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
-                return "asphalt"
-        hw_types = [el.get("tags", {}).get("highway") for el in elements]
-        logger.info("surface_type (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
-        return "ground"
-    logger.warning("surface_type all retries failed at (%.5f, %.5f) → error", lat, lon)
-    return "error"
+                result["surface"] = "asphalt"
+                logger.info("terrain_info (%.5f, %.5f) no surface tag, highway=%s → asphalt", lat, lon, hw)
+                return result
+
+        hw_types = [el.get("tags", {}).get("highway") for el in highway_els]
+        logger.info("terrain_info (%.5f, %.5f) highway=%s, no surface tag → ground", lat, lon, hw_types)
+        return result
+
+    logger.warning("terrain_info all retries failed at (%.5f, %.5f) → error", lat, lon)
+    result["surface"] = "error"
+    return result
+
+
+def fetch_surface_type(lat: float, lon: float) -> str:
+    """Обратная совместимость — тонкая обёртка над fetch_terrain_info."""
+    return fetch_terrain_info(lat, lon)["surface"]
 
 
 def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
@@ -445,6 +601,49 @@ def apply_surface_modifiers(soil_params: dict, surface: str) -> dict:
         "capacity":        soil_params["capacity"]     * mods["capacity_mult"],
         "desorptivity":    soil_params["desorptivity"] * mods["desorptivity_mult"],
         "snow_factor":     mods.get("snow_factor",     1.0),
+    }
+
+
+def apply_forest_modifiers(soil_params: dict, is_forest: bool, leaf_type: str = "") -> dict:
+    """Корректирует параметры под лесной полог.
+
+    Лес замедляет испарение (меньше солнца и ветра под кронами)
+    и перехватывает часть осадков (они испаряются с листьев, не достигая грунта).
+
+    Коэффициенты:
+      desorptivity × 0.50  — испарение из Stage 2 в 2× медленнее под пологом
+                             (экранирование ветра и радиации)
+      rain_factor  = 0.70  — хвойный лес (Horton 1919; перехват ~25–35%)
+      rain_factor  = 0.80  — лиственный лес (Zinke 1967; перехват ~15–25%)
+    """
+    if not is_forest:
+        return soil_params
+    rain_factor = 0.70 if leaf_type == "needleleaved" else 0.80
+    return {
+        **soil_params,
+        "desorptivity": soil_params["desorptivity"] * 0.50,
+        "rain_factor":  rain_factor,
+    }
+
+
+def apply_slope_modifier(soil_params: dict, slope_rad: float) -> dict:
+    """Корректирует параметры под уклон рельефа.
+
+    Крутые склоны — вода стекает быстрее, меньше задерживается в верхнем слое.
+    capacity уменьшается с ростом уклона.
+
+    0°  → factor = 1.00  (без изменений)
+    15° → factor ≈ 0.84  (уклон ~27%)
+    30° → factor ≈ 0.65  (уклон ~58%)
+    45° → factor = 0.40  (ограничение снизу)
+
+    Источник: Horton (1945) overland flow; USDA TR-55 runoff curve numbers.
+    """
+    slope_pct = math.tan(slope_rad) * 100.0   # процент уклона
+    capacity_factor = max(0.40, 1.0 - slope_pct * 0.012)
+    return {
+        **soil_params,
+        "capacity": soil_params["capacity"] * capacity_factor,
     }
 
 
@@ -573,12 +772,17 @@ def forecast_trail_drying(results, verbose=True):
             forecast = fetch_forecast(point["lat"], point["lon"], days_ahead=16)
             
             initial_state = {
-                "moisture": point["moisture"],
-                "capacity": point["capacity"],
-                "wet_index": point["wet_index"],
-                "snow_cover": point["snow_cover"],
+                "moisture":    point["moisture"],
+                "capacity":    point["capacity"],
+                "wet_index":   point["wet_index"],
+                "snow_cover":  point["snow_cover"],
+                "stage2_days": point.get("stage2_days", 0),
             }
             soil_params = apply_surface_modifiers(SOIL_PARAMS, point.get("surface", "ground"))
+            soil_params = apply_forest_modifiers(
+                soil_params, point.get("is_forest", False), point.get("leaf_type", "")
+            )
+            soil_params = apply_slope_modifier(soil_params, point.get("slope_rad", 0.0))
             forecast_results = simulate_forecast(initial_state, forecast, soil_params)
             all_forecasts.append({
                 "point": point,
