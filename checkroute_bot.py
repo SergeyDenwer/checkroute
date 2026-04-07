@@ -295,6 +295,10 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     # Строим строки прогноза
     forecast_rows = []
+    try:
+        await message.edit_text(header + "🔮 Загружаю прогноз погоды (может занять ~минуту)...")
+    except Exception:
+        pass
     forecast_info = await asyncio.to_thread(forecast_trail_drying, results, False)
 
     if not forecast_info:

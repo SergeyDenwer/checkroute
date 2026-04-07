@@ -1016,10 +1016,16 @@ def forecast_trail_drying(results, verbose=True):
     if not valid:
         return None
 
-    forecast_points = valid
-    
+    # Ограничиваем до 3 точек (начало, середина, конец) — чтобы не долбить API
+    MAX_FORECAST_POINTS = 3
+    if len(valid) > MAX_FORECAST_POINTS:
+        step = len(valid) / MAX_FORECAST_POINTS
+        forecast_points = [valid[int(i * step)] for i in range(MAX_FORECAST_POINTS)]
+    else:
+        forecast_points = valid
+
     if verbose:
-        print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
+        print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам (из {len(valid)})...")
     
     all_forecasts = []
     _forecast_cache = {}  # (lat2, lon2) → forecast json
