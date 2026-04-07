@@ -487,6 +487,208 @@ def _overpass_wait_for_slot(timeout: int = 60) -> bool:
     return False
 
 
+def _fetch_terrain_bbox(south: float, west: float, north: float, east: float):
+    """Один Overpass bbox-запрос — все highway ways + лесные полигоны в прямоугольнике.
+
+    Возвращает (highway_ways, forest_polys) или (None, None) при ошибке.
+    Каждый элемент: {"tags": {...}, "geometry": [{"lat":, "lon":}, ...]}
+
+    Примечание: мультиполигонные relation обрабатываются упрощённо —
+    геометрии всех членов конкатенируются. Для простых лесных полигонов
+    (closed way) работает точно.
+    """
+    buf = 0.002  # ~220м буфер вокруг bbox
+    query = (
+        f"[out:json][timeout:90];"
+        f"("
+        f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[highway];"
+        f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[natural=wood];"
+        f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[landuse=forest];"
+        f"  relation({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[natural=wood];"
+        f"  relation({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[landuse=forest];"
+        f");"
+        f"out tags geom;"
+    )
+
+    if not _overpass_wait_for_slot(timeout=90):
+        logger.warning("terrain_bbox: no Overpass slot for bbox (%.4f,%.4f,%.4f,%.4f)",
+                       south, west, north, east)
+        return None, None
+
+    for attempt in range(3):
+        try:
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=100)
+        except Exception as e:
+            logger.warning("terrain_bbox exception: %s", e)
+            return None, None
+
+        if resp.status_code == 429:
+            if not _overpass_wait_for_slot(timeout=90):
+                return None, None
+            continue
+        if resp.status_code in (503, 504):
+            time.sleep(5 * (attempt + 1))
+            continue
+        if resp.status_code != 200:
+            logger.warning("terrain_bbox HTTP %s", resp.status_code)
+            return None, None
+
+        elements = resp.json().get("elements", [])
+        highway_ways = []
+        forest_polys = []
+
+        for el in elements:
+            tags = el.get("tags", {})
+            geom = el.get("geometry") or []
+
+            # Relation: собираем геометрию из members
+            if el.get("type") == "relation" and not geom:
+                for member in el.get("members", []):
+                    mgeom = member.get("geometry") or []
+                    geom.extend(mgeom)
+
+            if not geom:
+                continue
+
+            if "highway" in tags:
+                highway_ways.append({"tags": tags, "geometry": geom})
+            if tags.get("natural") == "wood" or tags.get("landuse") == "forest":
+                forest_polys.append({"tags": tags, "geometry": geom})
+
+        logger.info("terrain_bbox (%.4f,%.4f,%.4f,%.4f): %d highway, %d forest",
+                    south, west, north, east, len(highway_ways), len(forest_polys))
+        return highway_ways, forest_polys
+
+    return None, None
+
+
+def _way_dist_sq(lat: float, lon: float, geom: list) -> float:
+    """Минимальное расстояние² от точки до ломаной линии.
+
+    Единицы — градусы² со скоррекцией cos(lat) по оси X.
+    50 м ≈ 0.00045° → порог 50 м² ≈ 2×10⁻⁷ °².
+    """
+    cos_lat = math.cos(math.radians(lat))
+    px = lon * cos_lat
+    py = lat
+    min_d = float("inf")
+
+    for i in range(len(geom) - 1):
+        ax = geom[i]["lon"] * cos_lat
+        ay = geom[i]["lat"]
+        bx = geom[i + 1]["lon"] * cos_lat
+        by = geom[i + 1]["lat"]
+        dx, dy = bx - ax, by - ay
+        len_sq = dx * dx + dy * dy
+        if len_sq < 1e-16:
+            d = (px - ax) ** 2 + (py - ay) ** 2
+        else:
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+            d = (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2
+        if d < min_d:
+            min_d = d
+
+    return min_d
+
+
+def _point_in_polygon(lat: float, lon: float, geom: list) -> bool:
+    """Ray casting алгоритм — точка внутри полигона?
+
+    geom: список {"lat":, "lon":} (первый == последний для closed way).
+    """
+    n = len(geom)
+    if n < 3:
+        return False
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = geom[i]["lon"], geom[i]["lat"]
+        xj, yj = geom[j]["lon"], geom[j]["lat"]
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def fetch_terrain_info_bulk(sampled_points: list, chunk_size: int = 30) -> list:
+    """Получает surface + forest для всех точек за минимум Overpass-запросов.
+
+    Разбивает точки на чанки по chunk_size, для каждого чанка делает
+    один bbox-запрос. Типичный маршрут 30–50 км → 1 запрос вместо 15–25.
+    При ошибке bbox-запроса чанк деградирует к поштучным вызовам fetch_terrain_info.
+
+    sampled_points: list of (lat, lon, elev, dist_km)
+    Возвращает list[dict] той же длины: {"surface", "is_forest", "leaf_type"}
+    """
+    # Порог близости к дороге: 50 м ≈ 0.00045° → 50м² ≈ 2×10⁻⁷ °²
+    PROXIMITY_SQ = (50.0 / 111_000.0) ** 2
+
+    n = len(sampled_points)
+    results = [None] * n
+
+    for chunk_start in range(0, n, chunk_size):
+        indices = list(range(chunk_start, min(chunk_start + chunk_size, n)))
+        pts = [sampled_points[i] for i in indices]
+
+        lats = [p[0] for p in pts]
+        lons = [p[1] for p in pts]
+        south, north = min(lats), max(lats)
+        west,  east  = min(lons), max(lons)
+
+        highway_ways, forest_polys = _fetch_terrain_bbox(south, west, north, east)
+
+        for local_i, pt_idx in enumerate(indices):
+            lat, lon = pts[local_i][0], pts[local_i][1]
+
+            if highway_ways is None:
+                # Fallback: поштучный запрос для этой точки
+                logger.info("terrain_bulk: bbox failed, falling back for point %d", pt_idx)
+                results[pt_idx] = fetch_terrain_info(lat, lon)
+                continue
+
+            # --- Ближайший highway way ---
+            best_way   = None
+            best_dist  = PROXIMITY_SQ
+            for way in highway_ways:
+                geom = way["geometry"]
+                if len(geom) < 2:
+                    continue
+                d = _way_dist_sq(lat, lon, geom)
+                if d < best_dist:
+                    best_dist = d
+                    best_way  = way
+
+            surface = "ground"
+            if best_way:
+                tags = best_way["tags"]
+                if "surface" in tags:
+                    surface = tags["surface"]
+                elif tags.get("highway") in _PAVED_HIGHWAY_TYPES:
+                    surface = "asphalt"
+                # иначе оставляем "ground" — непомеченная тропа
+
+            # --- Лес (point-in-polygon) ---
+            is_forest = False
+            leaf_type = ""
+            for poly in forest_polys:
+                if _point_in_polygon(lat, lon, poly["geometry"]):
+                    is_forest = True
+                    leaf_type = poly["tags"].get("leaf_type", "")
+                    break
+
+            if is_forest:
+                logger.info("terrain_bulk (%.5f,%.5f) surface=%s forest=True leaf=%s",
+                            lat, lon, surface, leaf_type)
+
+            results[pt_idx] = {
+                "surface":   surface,
+                "is_forest": is_forest,
+                "leaf_type": leaf_type,
+            }
+
+    return results
+
+
 def fetch_terrain_info(lat: float, lon: float) -> dict:
     """Тип покрытия и наличие лесного полога для точки — один Overpass-запрос.
 
