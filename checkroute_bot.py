@@ -297,6 +297,11 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     forecast_rows = []
     forecast_info = await asyncio.to_thread(forecast_trail_drying, results, False)
 
+    if not forecast_info:
+        logger.warning("analyze_gpx: forecast_trail_drying returned None — forecast section will be empty")
+    elif not forecast_info.get("daily_stats"):
+        logger.warning("analyze_gpx: forecast_info has no daily_stats — forecast section will be empty")
+
     if forecast_info and forecast_info.get("daily_stats"):
         today = datetime.now().date()
         seen_levels = set()
@@ -439,6 +444,10 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     sunday_ci      = today_ci
     sunday_level   = today_level
     forecast_info = await asyncio.to_thread(forecast_trail_drying, results, False)
+    if not forecast_info:
+        logger.warning("analyze_route_for_batch: forecast_trail_drying returned None — using current condition for all days")
+    elif not forecast_info.get("daily_stats"):
+        logger.warning("analyze_route_for_batch: forecast_info has no daily_stats — using current condition for all days")
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()

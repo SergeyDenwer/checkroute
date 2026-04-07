@@ -1041,6 +1041,10 @@ def forecast_trail_drying(results, verbose=True):
                 print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ✓")
         
         except Exception as e:
+            logger.warning(
+                "forecast_trail_drying: point km=%.1f fetch failed: %s",
+                point.get("distance_km", 0), e,
+            )
             if verbose:
                 print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ⚠️ {e}")
     
