@@ -295,7 +295,7 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     # Строим строки прогноза
     forecast_rows = []
-    forecast_info = forecast_trail_drying(results, verbose=False)
+    forecast_info = await asyncio.to_thread(forecast_trail_drying, results, False)
 
     if forecast_info and forecast_info.get("daily_stats"):
         today = datetime.now().date()
@@ -438,7 +438,7 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     saturday_level = today_level
     sunday_ci      = today_ci
     sunday_level   = today_level
-    forecast_info = forecast_trail_drying(results, verbose=False)
+    forecast_info = await asyncio.to_thread(forecast_trail_drying, results, False)
     if forecast_info and forecast_info.get("daily_stats"):
         for ds in forecast_info["daily_stats"]:
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()

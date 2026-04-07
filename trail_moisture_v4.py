@@ -416,6 +416,11 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
     lat = forecast_data.get("latitude", 45.0)
     rads  = [r or 0.0 for r in daily.get("shortwave_radiation_sum", [])]
     winds = [w or 0.0 for w in daily.get("wind_speed_10m_mean", [])]
+    n_days = len(daily.get("time", []))
+    logger.info(
+        "simulate_forecast lat=%.4f days=%d moisture_init=%.2f cap=%.2f desorpt=%.2f",
+        lat, n_days, surface_moisture, soil_params["capacity"], soil_params["desorptivity"],
+    )
     results = []
 
     for i in range(len(daily["time"])):
@@ -595,11 +600,6 @@ def _fetch_terrain_bbox(south: float, west: float, north: float, east: float):
 
         logger.info("terrain_bbox (%.4f,%.4f,%.4f,%.4f): %d highway, %d forest polygons",
                     south, west, north, east, len(highway_ways), len(forest_polys))
-        for fp in forest_polys:
-            tags = fp["tags"]
-            logger.info("  forest polygon: name=%r type=%s/%s leaf=%s nodes=%d",
-                        tags.get("name", ""), tags.get("natural", ""), tags.get("landuse", ""),
-                        tags.get("leaf_type", ""), len(fp["geometry"]))
         return highway_ways, forest_polys
 
     return None, None
