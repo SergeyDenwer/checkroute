@@ -162,13 +162,25 @@ def compute_point_slopes(raw_points, sampled, window_km=0.5):
             and raw_points[i][2] is not None
             and raw_points[i][2] > 0
         ]
-        if len(window_pts) < 2:
+        # Минимум 3 точки — одна пара может быть GPS-выбросом
+        if len(window_pts) < 3:
             slopes.append(0.0)
             continue
         elevs = [p[0] for p in window_pts]
         horiz_m = (window_pts[-1][1] - window_pts[0][1]) * 1000.0
-        elev_diff = max(elevs) - min(elevs)
-        slopes.append(math.atan(elev_diff / horiz_m) if horiz_m >= 1.0 else 0.0)
+        # Используем IQR-устойчивый перепад: разница 90-го и 10-го перцентилей
+        # вместо max-min, чтобы GPS-выбросы не раздували уклон
+        elevs_sorted = sorted(elevs)
+        n_e = len(elevs_sorted)
+        elev_diff = elevs_sorted[int(n_e * 0.9)] - elevs_sorted[int(n_e * 0.1)]
+        slope = math.atan(elev_diff / horiz_m) if horiz_m >= 1.0 else 0.0
+        if slope > math.radians(10):  # логируем только заметные уклоны (>10°)
+            logger.info(
+                "slope km=%.1f: elev_diff=%.0fm horiz=%.0fm → %.1f° (cap_factor=%.2f)",
+                dist_km, elev_diff, horiz_m, math.degrees(slope),
+                max(0.65, 1.0 - math.tan(slope) * 100 * 0.007),
+            )
+        slopes.append(slope)
     return slopes
 
 
@@ -291,16 +303,24 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
         # Stage 1: свободное испарение, лимитировано энергией.
         # Поправка через реальную радиацию: северный/затенённый склон получает меньше
         # солнца чем горизонтальная поверхность, для которой рассчитан ETO.
-        if expected_radiation > 0:
+        # Применяем ТОЛЬКО когда данные реально присутствуют: radiation > 5% expected.
+        # Нули в данных API → отсутствующие данные, не реальная темнота.
+        if expected_radiation > 0 and radiation >= expected_radiation * 0.05:
             rad_factor = max(0.3, min(1.4, radiation / expected_radiation))
         else:
             rad_factor = 1.0
-        # Ветер свыше ~3 м/с ускоряет испарение (сдувает насыщенный пограничный слой),
-        # ниже 3 м/с — чуть замедляет. ETO уже включает ветер для ref-поверхности,
-        # здесь корректируем дополнительное влияние открытости рельефа.
-        # Источник: Allen et al. (1998) FAO-56, табл. коэффициентов Kc.
-        wind_factor = max(0.75, min(1.25, 1.0 + (wind_speed - 3.0) * 0.04))
+        # Ветер применяем только когда есть данные (wind_speed > 0).
+        # Тихая погода (0 м/с) физически возможна, но 0 как "нет данных" — нет.
+        if wind_speed > 0:
+            wind_factor = max(0.75, min(1.25, 1.0 + (wind_speed - 3.0) * 0.04))
+        else:
+            wind_factor = 1.0
         evaporation = eto * 0.9 * rad_factor * wind_factor
+        if rad_factor != 1.0 or wind_factor != 1.0:
+            logger.debug(
+                "  Stage1 ETO=%.2f rad_f=%.2f(rad=%.1f/exp=%.1f) wind_f=%.2f(%.1fm/s) → evap=%.2f",
+                eto, rad_factor, radiation, expected_radiation, wind_factor, wind_speed, evaporation,
+            )
         stage2_days = 0  # в Stage 1 счётчик сбрасывается
     else:
         # Stage 2: Philip's sorptivity formula с реальным счётчиком суток.
@@ -333,6 +353,24 @@ def simulate_moisture(weather_data, soil_params):
     lat = weather_data.get("latitude", 45.0)
     rads  = [r or 0.0 for r in daily.get("shortwave_radiation_sum", [])]
     winds = [w or 0.0 for w in daily.get("wind_speed_10m_mean", [])]
+
+    # Логируем качество входных данных — ключ к диагностике аномалий
+    n_days = len(daily.get("time", []))
+    rad_present  = sum(1 for r in rads if r > 0)
+    wind_present = sum(1 for w in winds if w > 0)
+    mean_rad  = (sum(rads)  / len(rads))  if rads  else 0.0
+    mean_wind = (sum(winds) / len(winds)) if winds else 0.0
+    total_rain = sum(daily.get("rain_sum") or [0])
+    logger.info(
+        "simulate_moisture lat=%.4f days=%d rain_total=%.1fmm "
+        "radiation=%d/%d days (mean=%.1f MJ) wind=%d/%d days (mean=%.1f m/s) "
+        "capacity=%.2f desorpt=%.2f rain_f=%.2f",
+        lat, n_days, total_rain,
+        rad_present, n_days, mean_rad,
+        wind_present, n_days, mean_wind,
+        soil_params["capacity"], soil_params["desorptivity"],
+        soil_params.get("rain_factor", 1.0),
+    )
 
     for i in range(len(daily["time"])):
         try:
@@ -498,14 +536,16 @@ def _fetch_terrain_bbox(south: float, west: float, north: float, east: float):
     (closed way) работает точно.
     """
     buf = 0.002  # ~220м буфер вокруг bbox
+    # Relation лесных полигонов намеренно исключены: при конкатенации
+    # геометрий членов relation получается некорректный полигон, что даёт
+    # ложные срабатывания point-in-polygon на больших territory/заповедников.
+    # Только closed ways — простые, надёжно определяемые полигоны.
     query = (
         f"[out:json][timeout:90];"
         f"("
         f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[highway];"
         f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[natural=wood];"
         f"  way({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[landuse=forest];"
-        f"  relation({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[natural=wood];"
-        f"  relation({south-buf:.6f},{west-buf:.6f},{north+buf:.6f},{east+buf:.6f})[landuse=forest];"
         f");"
         f"out tags geom;"
     )
@@ -541,22 +581,23 @@ def _fetch_terrain_bbox(south: float, west: float, north: float, east: float):
             tags = el.get("tags", {})
             geom = el.get("geometry") or []
 
-            # Relation: собираем геометрию из members
-            if el.get("type") == "relation" and not geom:
-                for member in el.get("members", []):
-                    mgeom = member.get("geometry") or []
-                    geom.extend(mgeom)
-
             if not geom:
                 continue
 
             if "highway" in tags:
                 highway_ways.append({"tags": tags, "geometry": geom})
-            if tags.get("natural") == "wood" or tags.get("landuse") == "forest":
-                forest_polys.append({"tags": tags, "geometry": geom})
+            # Только closed ways (первая == последняя точка) — надёжные полигоны
+            if (tags.get("natural") == "wood" or tags.get("landuse") == "forest"):
+                if len(geom) >= 4 and geom[0] == geom[-1]:
+                    forest_polys.append({"tags": tags, "geometry": geom})
 
-        logger.info("terrain_bbox (%.4f,%.4f,%.4f,%.4f): %d highway, %d forest",
+        logger.info("terrain_bbox (%.4f,%.4f,%.4f,%.4f): %d highway, %d forest polygons",
                     south, west, north, east, len(highway_ways), len(forest_polys))
+        for fp in forest_polys:
+            tags = fp["tags"]
+            logger.info("  forest polygon: name=%r type=%s/%s leaf=%s nodes=%d",
+                        tags.get("name", ""), tags.get("natural", ""), tags.get("landuse", ""),
+                        tags.get("leaf_type", ""), len(fp["geometry"]))
         return highway_ways, forest_polys
 
     return None, None
@@ -676,9 +717,11 @@ def fetch_terrain_info_bulk(sampled_points: list, chunk_size: int = 30) -> list:
                     leaf_type = poly["tags"].get("leaf_type", "")
                     break
 
-            if is_forest:
-                logger.info("terrain_bulk (%.5f,%.5f) surface=%s forest=True leaf=%s",
-                            lat, lon, surface, leaf_type)
+            logger.info(
+                "terrain_bulk pt=%d (%.5f,%.5f) surface=%s forest=%s leaf=%s",
+                pt_idx, lat, lon, surface,
+                "YES" if is_forest else "no", leaf_type or "-",
+            )
 
             results[pt_idx] = {
                 "surface":   surface,
@@ -835,14 +878,15 @@ def apply_slope_modifier(soil_params: dict, slope_rad: float) -> dict:
     capacity уменьшается с ростом уклона.
 
     0°  → factor = 1.00  (без изменений)
-    15° → factor ≈ 0.84  (уклон ~27%)
-    30° → factor ≈ 0.65  (уклон ~58%)
-    45° → factor = 0.40  (ограничение снизу)
+    15° → factor ≈ 0.90  (уклон ~27%)
+    30° → factor ≈ 0.77  (уклон ~58%)
+    45° → factor = 0.65  (ограничение снизу)
 
     Источник: Horton (1945) overland flow; USDA TR-55 runoff curve numbers.
+    Коэффициент намеренно консервативный: GPS elevation данные имеют шум.
     """
     slope_pct = math.tan(slope_rad) * 100.0   # процент уклона
-    capacity_factor = max(0.40, 1.0 - slope_pct * 0.012)
+    capacity_factor = max(0.65, 1.0 - slope_pct * 0.007)
     return {
         **soil_params,
         "capacity": soil_params["capacity"] * capacity_factor,
