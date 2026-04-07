@@ -172,13 +172,12 @@ def fetch_forecast(lat, lon, days_ahead=16):
             "rain_sum",
             "snowfall_sum",
             "et0_fao_evapotranspiration",
-            "shortwave_radiation_sum",
             "wind_speed_10m_mean",
         ]),
         "forecast_days": days_ahead,
         "timezone": "auto"
     }
-    
+
     response = requests.get(url, params=params, timeout=15)
     if response.status_code != 200:
         raise Exception(f"Forecast API Error: {response.status_code}")
@@ -186,95 +185,89 @@ def fetch_forecast(lat, lon, days_ahead=16):
 
 
 def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index,
-                  stage2_days, soil_params, *, radiation=None, wind_speed=None):
+                  stage2_days, soil_params, *, wind_speed=None):
     """Один шаг симуляции влажности (один день).
 
     stage2_days — счётчик последовательных суток в Stage 2 (Philip's formula).
-    Сбрасывается в 0 при переходе обратно в Stage 1 (после дождя) или под снегом.
+    Сбрасывается в 0 при переходе обратно в Stage 1 или под снегом.
     Источник: Philip (1957), Stroosnijder (1987).
-    Параметр DESORPTIVITY [мм/√день] теперь верифицируем по литературе:
-      суглинок 2–4 мм/√день (Philip 1957), песок 5–8, глина 0.5–1.5 (Leeds-Harrison 1994).
+    DESORPTIVITY [мм/√день] верифицируем: суглинок 2–4, песок 5–8, глина 0.5–1.5.
 
-    radiation — суточная инсоляция МДж/м² (shortwave_radiation_sum из Open-Meteo).
-    Поправочный коэффициент к ETO в Stage 1: компенсирует систематическую ошибку ETO
-    на затенённых/северных склонах (ETO рассчитан для горизонтальной поверхности).
-    Референс 12 МДж/м²/день — среднегодовое для умеренного климата.
+    soil_params ключи (помимо базовых capacity/desorptivity/stage1_ratio):
+      eto_factor        — лесной полог × аспект-коэффициент испарения (по умолчанию 1.0)
+      rain_factor       — перехват осадков кронами (по умолчанию 1.0)
+      snow_factor       — доля талой воды, достигающей поверхности (по умолчанию 1.0)
+      degree_day_factor — степень-день таяния снега мм/°С/день (по умолчанию 3.0);
+                          модифицируется аспектом: юг→4.0, север→1.5 (Rango & Martinec 1995)
+      is_forest         — bool, для Stage 2 wind bonus (под пологом ветер не сушит)
 
-    wind_speed — скорость ветра м/с (wind_speed_10m_mean).
-    С soil_params["elev_rel"] (-1..+1 от медианы маршрута) даёт эффект укрытости:
-    открытый хребет сохнет быстрее, укрытая долина — медленнее.
+    wind_speed — скорость ветра м/с (wind_speed_10m_mean из Open-Meteo).
+    Используется ТОЛЬКО в Stage 2 на открытых (не лесных) точках: конвекция у
+    поверхности ускоряет испарение в первые дни Stage 2 (пока поверхность ещё влажная).
+    Stage 1 уже содержит ветер через ETO (Penman-Monteith), двойной счёт исключён.
+    Максимальный бонус 0.2 мм/день при ветре ≥8 м/с, только первые 5 суток Stage 2.
 
     wet_index ∈ [0, 1] — экспоненциальная память о последних дождях.
-    0 = давно сухо, 1 = только что сильный дождь. Используется только для rain_signal,
-    больше не участвует в формуле испарения.
     """
-    DESORPTIVITY = soil_params["desorptivity"]
-    CAPACITY = soil_params["capacity"]
-    STAGE1_THRESHOLD = CAPACITY * soil_params["stage1_ratio"]
-    # snow_factor < 1 для быстродренирующих поверхностей: снег стекает, не блокируя испарение
-    SNOW_FACTOR = soil_params.get("snow_factor", 1.0)
-    # Лесной полог снижает испарение (ETO) и перехватывает часть осадков
-    ETO_FACTOR  = soil_params.get("eto_factor",  1.0)
-    RAIN_FACTOR = soil_params.get("rain_factor", 1.0)
+    DESORPTIVITY      = soil_params["desorptivity"]
+    CAPACITY          = soil_params["capacity"]
+    STAGE1_THRESHOLD  = CAPACITY * soil_params["stage1_ratio"]
+    SNOW_FACTOR       = soil_params.get("snow_factor",       1.0)
+    ETO_FACTOR        = soil_params.get("eto_factor",        1.0)
+    RAIN_FACTOR       = soil_params.get("rain_factor",       1.0)
+    DEGREE_DAY_FACTOR = soil_params.get("degree_day_factor", 3.0)
+    IS_FOREST         = soil_params.get("is_forest",         False)
 
-    # Перехват осадков пологом (лесные трейлы: −20% дождя)
+    # Перехват осадков пологом (лес: −20%)
     rain = rain * RAIN_FACTOR
 
-    # Open-Meteo snowfall_sum в cm снежного покрова (глубина, ~1мм воды = 1 см снега)
-    # × 10 → мм снежного покрова; × 0.1 → мм SWE (плотность снега ~10%, стандарт)
     snowfall_mm = snowfall_cm * 10
     water_input = rain
 
     snow_cover += snowfall_mm
     if temp_mean > 0 and snow_cover > 0:
-        # Degree-day factor 3.0 мм/°С/день — нижний край для лесных трейлов
-        # Источник: Rango & Martinec (1995); диапазон 1.5–3.5 для леса, 4–8 для открытых склонов
-        melt_potential = temp_mean * 3.0
-        snow_water = snow_cover * 0.1   # SWE = 10% от глубины снега
-        actual_melt = min(snow_water, melt_potential)
-        snow_cover -= actual_melt * 10
-        snow_cover = max(0, snow_cover)
-        # Для быстродренирующих поверхностей (gravel, rock) большая часть талой воды
-        # стекает немедленно и не задерживается на поверхности
-        water_input += actual_melt * SNOW_FACTOR
+        # Degree-day таяние: фактор модифицируется аспектом склона
+        # юг: 4.0 мм/°С/день, север: 1.5, восток/запад/равнина: 3.0
+        # Источник: Rango & Martinec (1995)
+        melt_potential = temp_mean * DEGREE_DAY_FACTOR
+        snow_water     = snow_cover * 0.1   # SWE = 10% глубины снега
+        actual_melt    = min(snow_water, melt_potential)
+        snow_cover    -= actual_melt * 10
+        snow_cover     = max(0, snow_cover)
+        water_input   += actual_melt * SNOW_FACTOR
 
-    # Плавное обновление wet_index: каждый мм дождя вносит вклад, каждый сухой день гасит 15%
+    # Плавное обновление wet_index
     rain_signal = water_input / (water_input + 5.0) if water_input > 0 else 0.0
     wet_index = min(1.0, wet_index * 0.85 + rain_signal)
 
-    # Поправка радиации к ETO (корректирует горизонтальный ETO для склонов/затенения)
-    # 12 МДж/м²/день — приближённое среднегодовое для умеренного климата
-    _REF_RADIATION = 12.0
-    if radiation is not None and radiation >= 0:
-        radiation_factor = min(1.3, max(0.5, radiation / _REF_RADIATION))
-    else:
-        radiation_factor = 1.0
-
-    # Коэффициент укрытости: открытый хребет сохнет быстрее, укрытая долина — медленнее
-    if wind_speed is not None:
-        elev_rel = soil_params.get("elev_rel", 0.0)  # -1..+1 от медианы маршрута
-        shelter_factor = 1.0 + elev_rel * 0.2 * min(1.0, wind_speed / 5.0)
-        shelter_factor = min(1.3, max(0.7, shelter_factor))
-    else:
-        shelter_factor = 1.0
-
     if snow_cover * SNOW_FACTOR > 5:
         evaporation = 0.05
-        stage2_days = 0  # под снегом Stage 2 не считаем
+        stage2_days = 0
+
     elif surface_moisture > STAGE1_THRESHOLD:
-        # Stage 1: испарение ограничено атмосферой (Penman-Monteith)
-        evaporation = eto * 0.9 * ETO_FACTOR * radiation_factor * shelter_factor
-        stage2_days = 0  # почва снова влажная — сброс счётчика Stage 2
+        # Stage 1: испарение ограничено атмосферой (Penman-Monteith).
+        # ETO_FACTOR объединяет: лесной полог (0.35) × аспект (0.6–1.2).
+        # Ветер уже в ETO — двойной счёт не нужен.
+        evaporation = eto * 0.9 * ETO_FACTOR
+        stage2_days = 0
+
     else:
         # Stage 2: испарение ограничено почвенной диффузией (Philip 1957)
-        # dE(t) = S × (√t − √(t−1)), где t — реальные сутки в Stage 2, S — десорптивность [мм/√день]
+        # dE(t) = S × (√t − √(t−1)), t — реальные сутки в Stage 2
         stage2_days += 1
-        str_factor = math.sqrt(stage2_days) - math.sqrt(stage2_days - 1)
+        str_factor  = math.sqrt(stage2_days) - math.sqrt(stage2_days - 1)
         evaporation = DESORPTIVITY * str_factor
 
-    evaporation = min(evaporation, surface_moisture)
-    surface_moisture = surface_moisture + water_input - evaporation
-    surface_moisture = max(0, min(surface_moisture, CAPACITY))
+        # Wind bonus Stage 2: ветер ускоряет конвективное испарение с влажной поверхности
+        # только на открытых точках (не лес), только первые 5 суток (поверхность ещё влажная)
+        # max +0.2 мм/день при ветре ≥8 м/с
+        if not IS_FOREST and wind_speed is not None and wind_speed > 4.0 and stage2_days <= 5:
+            wind_bonus  = 0.2 * min(1.0, (wind_speed - 4.0) / 4.0)
+            evaporation = evaporation + wind_bonus
+
+    evaporation       = min(evaporation, surface_moisture)
+    surface_moisture  = surface_moisture + water_input - evaporation
+    surface_moisture  = max(0, min(surface_moisture, CAPACITY))
 
     return surface_moisture, snow_cover, wet_index, stage2_days
 
@@ -287,12 +280,10 @@ def simulate_moisture(weather_data, soil_params):
     wet_index = 0.0
     stage2_days = 0
 
-    radiances = daily.get("shortwave_radiation_sum") or []
-    winds     = daily.get("wind_speed_10m_mean")     or []
+    winds = daily.get("wind_speed_10m_mean") or []
 
     for i in range(len(daily["time"])):
-        radiation  = (radiances[i] if i < len(radiances) else None) or None
-        wind_speed = (winds[i]     if i < len(winds)     else None) or None
+        wind_speed = (winds[i] if i < len(winds) else None) or None
         surface_moisture, snow_cover, wet_index, stage2_days = _simulate_day(
             temp_mean=daily["temperature_2m_mean"][i] or 0,
             rain=daily["rain_sum"][i] or 0,
@@ -303,7 +294,6 @@ def simulate_moisture(weather_data, soil_params):
             wet_index=wet_index,
             stage2_days=stage2_days,
             soil_params=soil_params,
-            radiation=radiation,
             wind_speed=wind_speed,
         )
 
@@ -324,15 +314,12 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
     wet_index = initial_state.get("wet_index", 0.0)
     stage2_days = initial_state.get("stage2_days", 0)
 
-    radiances = daily.get("shortwave_radiation_sum") or []
-    winds     = daily.get("wind_speed_10m_mean")     or []
-
+    winds   = daily.get("wind_speed_10m_mean") or []
     results = []
 
     for i in range(len(daily["time"])):
-        temp_mean = ((daily["temperature_2m_max"][i] or 0) + (daily["temperature_2m_min"][i] or 0)) / 2
-        radiation  = (radiances[i] if i < len(radiances) else None) or None
-        wind_speed = (winds[i]     if i < len(winds)     else None) or None
+        temp_mean  = ((daily["temperature_2m_max"][i] or 0) + (daily["temperature_2m_min"][i] or 0)) / 2
+        wind_speed = (winds[i] if i < len(winds) else None) or None
         surface_moisture, snow_cover, wet_index, stage2_days = _simulate_day(
             temp_mean=temp_mean,
             rain=daily["rain_sum"][i] or 0,
@@ -343,7 +330,6 @@ def simulate_forecast(initial_state, forecast_data, soil_params):
             wet_index=wet_index,
             stage2_days=stage2_days,
             soil_params=soil_params,
-            radiation=radiation,
             wind_speed=wind_speed,
         )
         results.append({
@@ -548,7 +534,6 @@ def fetch_weather_data_batch(lat_lon_pairs: list, days_back: int = 14) -> list:
             "rain_sum",
             "snowfall_sum",
             "et0_fao_evapotranspiration",
-            "shortwave_radiation_sum",
             "wind_speed_10m_mean",
         ]),
         "timezone": "auto",
@@ -580,7 +565,6 @@ def fetch_forecast_batch(lat_lon_pairs: list, days_ahead: int = 16) -> list:
             "rain_sum",
             "snowfall_sum",
             "et0_fao_evapotranspiration",
-            "shortwave_radiation_sum",
             "wind_speed_10m_mean",
         ]),
         "forecast_days": days_ahead,
@@ -660,41 +644,81 @@ def fetch_surface_type(lat: float, lon: float) -> str:
 
 
 def apply_surface_modifiers(soil_params: dict, surface: str,
-                            is_forest: bool = False, slope_deg: float = 0.0) -> dict:
+                            is_forest: bool = False,
+                            slope_deg: float = 0.0,
+                            aspect_deg: float = None) -> dict:
     """
     Возвращает копию soil_params, скорректированную под тип покрытия,
-    растительный полог и уклон склона.
+    растительный полог, уклон и аспект склона.
 
     is_forest — точка находится в лесу (OSM natural=wood / landuse=forest).
-    Коэффициенты по лесной гидрологии (Horton 1919, Zinke 1967, Oke 1987):
-      - desorptivity ×0.5:  Stage 2 сохнет вдвое медленнее под пологом
-      - eto_factor = 0.35:  65% инсоляции блокируется кронами
-      - rain_factor = 0.80: 20% осадков перехватывается (для хвойных до 40%)
+    Источники: Horton (1919), Zinke (1967), Oke (1987):
+      - desorptivity ×0.5:  Stage 2 под пологом сохнет вдвое медленнее
+      - eto_factor (лес) = 0.35: 65% инсоляции блокируется кронами
+      - rain_factor = 0.80: 20% осадков перехватывается
 
     slope_deg — угол уклона трейла в градусах.
-    Крутой склон дренирует быстрее → эффективная ёмкость ниже:
+    Крутой склон дренирует быстрее → ёмкость ниже:
       slope_drainage = 1 + sin(slope) × 1.5
-      capacity /= slope_drainage
     slope_deg=15° → /1.39, slope_deg=30° → /1.75
+
+    aspect_deg — аспект склона, градусы от севера по часовой стрелке (из DEM).
+    None = плоский рельеф или аспект неизвестен → нейтральные коэффициенты.
+
+    Формулы аспект-коэффициентов (непрерывные косинусные, без бинарных порогов):
+
+      eto_aspect   = 1.0 − 0.4 × cos(aspect_rad)
+        N (0°)  → 0.60  (меньше прямого солнца)
+        S (180°)→ 1.40  → обрезаем до 1.25 (реальное превышение над горизонтальным ETO)
+        E/W     → 1.00
+
+      degree_day = 3.0 − 1.5 × cos(aspect_rad)
+        N (0°)  → 1.50 мм/°С/день  (снег тает медленнее)
+        S (180°)→ 4.50 → обрезаем до 4.00
+        E/W     → 3.00
+        Источник: Rango & Martinec (1995)
+
+    На плоском рельефе (slope_deg < 3°) аспект не имеет физического смысла —
+    коэффициенты плавно занижаются до 1.0/3.0 по мере выполаживания.
     """
     mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0, "snow_factor": 1.0})
 
-    # Уклон увеличивает скорость дренажа, снижая эффективную ёмкость
+    # Уклон → дренаж → ёмкость
     slope_drainage = 1.0 + math.sin(math.radians(max(0.0, slope_deg))) * 1.5
+
+    # Аспект-коэффициенты (непрерывная косинусная формула)
+    if aspect_deg is not None:
+        # Плавное затухание на равнине: slope_deg=0° → weight=0, slope_deg≥5° → weight=1
+        aspect_weight = min(1.0, slope_deg / 5.0)
+        cos_a         = math.cos(math.radians(aspect_deg))
+        eto_aspect    = 1.0 + aspect_weight * (-0.4 * cos_a)   # 0.6 .. 1.4
+        ddf_aspect    = 3.0 + aspect_weight * (-1.5 * cos_a)   # 1.5 .. 4.5
+        eto_aspect    = min(1.25, max(0.60, eto_aspect))
+        ddf_aspect    = min(4.00, max(1.50, ddf_aspect))
+    else:
+        eto_aspect = 1.0
+        ddf_aspect = 3.0
+
+    # Лесной полог
+    if is_forest:
+        eto_forest   = 0.35
+        rain_factor  = 0.80
+        desorpt_mult = 0.5
+    else:
+        eto_forest   = 1.0
+        rain_factor  = 1.0
+        desorpt_mult = 1.0
 
     result = {
         **soil_params,
-        "capacity":     soil_params["capacity"]     * mods["capacity_mult"] / slope_drainage,
-        "desorptivity": soil_params["desorptivity"] * mods["desorptivity_mult"],
-        "snow_factor":  mods.get("snow_factor", 1.0),
-        "eto_factor":   1.0,
-        "rain_factor":  1.0,
+        "capacity":          soil_params["capacity"]     * mods["capacity_mult"] / slope_drainage,
+        "desorptivity":      soil_params["desorptivity"] * mods["desorptivity_mult"] * desorpt_mult,
+        "snow_factor":       mods.get("snow_factor", 1.0),
+        "eto_factor":        eto_forest * eto_aspect,   # лес × аспект
+        "rain_factor":       rain_factor,
+        "degree_day_factor": ddf_aspect,
+        "is_forest":         is_forest,
     }
-
-    if is_forest:
-        result["desorptivity"] *= 0.5
-        result["eto_factor"]    = 0.35
-        result["rain_factor"]   = 0.80
 
     return result
 
@@ -844,6 +868,87 @@ def compute_slopes_for_sampled(all_gpx_points: list, sampled_points: list) -> li
         slopes.append(round(slope_angle, 1))
 
     return slopes
+
+
+# URL бесплатного DEM-сервиса на базе SRTM 90м (без ключа, без лимитов)
+OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
+
+
+def fetch_aspect_batch(lat_lon_pairs: list) -> list:
+    """
+    Вычисляет аспект склона (градусы от севера, по часовой стрелке) для каждой точки
+    по SRTM DEM 90м через Open-Elevation API.
+
+    Для каждой точки делает 3 elevation-запроса:
+      center (lat, lon), north (+100м), east (+100м)
+    Из градиента высот вычисляет направление падения склона (аспект):
+      dz/dy = (elev_N − elev_C) / 100
+      dz/dx = (elev_E − elev_C) / 100
+      aspect = atan2(−dz/dx, −dz/dy)  ← направление «вниз»
+
+    Все точки запрашиваются одним POST-батчем.
+    При недоступности API возвращает all-None (→ нейтральные коэффициенты).
+
+    Источник коэффициентов аспекта: Rango & Martinec (1995), список Oke (1987).
+    """
+    if not lat_lon_pairs:
+        return []
+
+    # ~100м: 0.0009° широты ≈ 100м везде; 0.0013° долготы ≈ 100м на 45°N
+    LAT_OFFSET = 0.0009
+    LON_OFFSET = 0.0013
+
+    locations = []
+    for lat, lon in lat_lon_pairs:
+        locations.append({"latitude": lat,              "longitude": lon})
+        locations.append({"latitude": lat + LAT_OFFSET, "longitude": lon})
+        locations.append({"latitude": lat,              "longitude": lon + LON_OFFSET})
+
+    try:
+        resp = requests.post(
+            OPEN_ELEVATION_URL,
+            json={"locations": locations},
+            timeout=30,
+        )
+    except Exception as e:
+        logger.warning("fetch_aspect_batch: request failed: %s", e)
+        return [None] * len(lat_lon_pairs)
+
+    if resp.status_code != 200:
+        logger.warning("fetch_aspect_batch: HTTP %s", resp.status_code)
+        return [None] * len(lat_lon_pairs)
+
+    raw = resp.json().get("results", [])
+    if len(raw) != len(locations):
+        logger.warning("fetch_aspect_batch: unexpected result count %d vs %d",
+                       len(raw), len(locations))
+        return [None] * len(lat_lon_pairs)
+
+    aspects = []
+    for i in range(len(lat_lon_pairs)):
+        ec = raw[i * 3]["elevation"]
+        en = raw[i * 3 + 1]["elevation"]
+        ee = raw[i * 3 + 2]["elevation"]
+
+        if ec is None or en is None or ee is None:
+            aspects.append(None)
+            continue
+
+        dz_dy = (en - ec) / 100.0   # м/м на север
+        dz_dx = (ee - ec) / 100.0   # м/м на восток
+
+        if abs(dz_dy) < 1e-4 and abs(dz_dx) < 1e-4:
+            # Плоский рельеф — аспект не определён
+            aspects.append(None)
+            continue
+
+        # Направление «вниз по склону» от севера, по часовой стрелке
+        aspect = math.degrees(math.atan2(-dz_dx, -dz_dy)) % 360
+        aspects.append(round(aspect, 1))
+
+    n_valid = sum(1 for a in aspects if a is not None)
+    logger.info("fetch_aspect_batch: %d/%d valid aspects", n_valid, len(lat_lon_pairs))
+    return aspects
 
 
 def get_status(moisture, capacity):
@@ -1014,8 +1119,8 @@ def forecast_trail_drying(results, verbose=True):
                 point.get("surface", "ground"),
                 is_forest=point.get("is_forest", False),
                 slope_deg=point.get("slope_deg", 0.0),
+                aspect_deg=point.get("aspect_deg"),
             )
-            soil_params["elev_rel"] = point.get("elev_rel", 0.0)
             forecast_results = simulate_forecast(initial_state, forecast, soil_params)
             all_forecasts.append({
                 "point": point,
