@@ -362,6 +362,7 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
         forecast_rows=forecast_rows,
         points_sampled=len(sampled),
         points_analyzed=len(results),
+        rain_now=rain_now,
     )
 
     return card_data, None

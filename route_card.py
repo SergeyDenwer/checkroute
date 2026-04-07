@@ -55,6 +55,7 @@ class RouteCardData:
     forecast_rows:   List[ForecastRow] = field(default_factory=list)
     points_sampled:  int   = 0     # total sampled checkpoints
     points_analyzed: int   = 0     # after skipping paved ones
+    rain_now:        bool  = False  # идёт дождь прямо сейчас — скрыть шкалу/состояние
 
 
 def compute_condition_index(
@@ -148,7 +149,8 @@ class RouteCardRenderer:
 
         y = 0
         y = self._draw_header(ctx, data, y)
-        y = self._draw_speedometer_section(ctx, data, y)
+        if not data.rain_now:
+            y = self._draw_speedometer_section(ctx, data, y)
         if data.forecast_rows:
             self._draw_forecast_section(ctx, data, y)
 
@@ -161,7 +163,8 @@ class RouteCardRenderer:
     def _total_height(self, data: RouteCardData) -> int:
         # rows_start - card_y = (38+34) + 126 = 198; card_h = 198 + 168 + 16 = 382
         h = 80           # header
-        h += 20 + 382    # scale + status merged card
+        if not data.rain_now:
+            h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
             h += 38 + 6 + len(data.forecast_rows) * 56 + 20
         h += 40          # bottom padding
