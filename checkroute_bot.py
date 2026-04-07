@@ -14,6 +14,7 @@ import json
 import math
 import os
 import logging
+import logging.handlers
 import tempfile
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -47,10 +48,25 @@ from trail_moisture_v4 import (
 )
 
 # Настройка логирования
+_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
+
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format=_LOG_FORMAT,
+    level=logging.INFO,
+    handlers=[
+        # Консоль — для systemd/docker
+        logging.StreamHandler(),
+        # Файл — ротация: 5 МБ × 3 файла = max 15 МБ
+        logging.handlers.RotatingFileHandler(
+            _log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        ),
+    ],
 )
+
+# trail_moisture_v4 пишет DEBUG-детали по факторам радиации/ветра — включаем
+logging.getLogger("trail_moisture_v4").setLevel(logging.DEBUG)
+
 logger = logging.getLogger(__name__)
 
 ROUTES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes")
