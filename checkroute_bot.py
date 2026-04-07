@@ -42,6 +42,7 @@ from trail_moisture_v4 import (
     aggregate_status,
     adaptive_sample_km,
     forecast_trail_drying,
+    check_current_rain_batch,
     haversine_distance,
     SOIL_PARAMS,
     PAVED_SURFACES,
@@ -210,6 +211,8 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     unpaved_pairs = [lat_lon_pairs[i] for i in unpaved_indices]
 
     weather_by_index: dict = {}
+    rain_now = False
+    rain_now_mm = 0.0
     if unpaved_pairs:
         await message.edit_text(
             header + f"🌦 Запрашиваю погоду для {len(unpaved_pairs)}/{total} грунтовых точек..."
@@ -222,6 +225,12 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
                 weather_by_index[orig_idx] = weather_batch[list_pos]
         except Exception as e:
             logger.warning("Weather batch error: %s", e)
+        try:
+            rain_now, rain_now_mm = await asyncio.to_thread(
+                check_current_rain_batch, unpaved_pairs
+            )
+        except Exception as e:
+            logger.warning("Rain check error: %s", e)
 
     # Фаза 3: симуляция (чистые вычисления)
     await message.edit_text(header + "🔬 Симулирую влажность...")
@@ -300,42 +309,45 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     ci = compute_condition_index(dry_pct, wet_pct, mud_pct, swamp_pct)
     _, verdict_level = verdict_from_ci(ci)
 
-    # Строим строки прогноза
+    # Если прямо сейчас или в ближайшие 2 часа идёт дождь — вердикт ДОЖДЬ
+    if rain_now:
+        verdict_level = 0
+        logger.info("Rain now detected (%.2f mm/3h) — overriding verdict to ДОЖДЬ", rain_now_mm)
+
+    # Строим строки прогноза — 7 дней хронологически
+    DAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
     forecast_rows = []
     forecast_info = forecast_trail_drying(results, verbose=False)
 
     if forecast_info and forecast_info.get("daily_stats"):
         today = datetime.now().date()
-        seen_levels = set()
-        transitions = []
+        days_shown = 0
 
         for ds in forecast_info["daily_stats"]:
+            if days_shown >= 7:
+                break
             ds_date = datetime.strptime(ds["date"], "%Y-%m-%d").date()
-            if ds_date == today:
-                continue  # сегодня уже показан как текущий статус — не дублируем в прогнозе
+            if ds_date <= today:
+                continue  # сегодня уже показан как текущий статус
             if ds.get("avg_rain", 0) >= RAIN_DAY_MM:
-                level = 0  # ДОЖДЬ — симуляция на этот день бессмысленна
+                level = 0  # ДОЖДЬ — осадки в прогнозе
             else:
                 ds_ci = compute_condition_index(ds["dry_pct"], ds["wet_pct"], ds["mud_pct"], ds["swamp_pct"])
                 _, level = verdict_from_ci(ds_ci)
-            if level not in seen_levels:
-                transitions.append((ds["date"], level))
-                seen_levels.add(level)
 
-        transitions.sort(key=lambda x: x[1])  # worst first (0=дождь, 1=нельзя … 4=можно)
-
-        for date_str, level in transitions:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            days_until = (dt.date() - today).days
-            if days_until == 0:
-                date_label = "сегодня"
+            days_until = (ds_date - today).days
+            if days_until == 1:
+                date_label = "завтра"
             else:
-                date_label = f"{date_str[8:10]}.{date_str[5:7]} (через {days_until} дн.)"
+                dow = DAYS_RU[ds_date.weekday()]
+                date_label = f"{dow} {ds_date.strftime('%d.%m')}"
+
             forecast_rows.append(ForecastRow(
                 level=level,
                 label=VERDICT_LABELS[level],
                 date_str=date_label,
             ))
+            days_shown += 1
 
     card_data = RouteCardData(
         route_name=route_name or "Маршрут",
