@@ -149,7 +149,9 @@ class RouteCardRenderer:
 
         y = 0
         y = self._draw_header(ctx, data, y)
-        if not data.rain_now:
+        if data.rain_now:
+            y = self._draw_rain_now_section(ctx, y)
+        else:
             y = self._draw_speedometer_section(ctx, data, y)
         if data.forecast_rows:
             self._draw_forecast_section(ctx, data, y)
@@ -163,7 +165,9 @@ class RouteCardRenderer:
     def _total_height(self, data: RouteCardData) -> int:
         # rows_start - card_y = (38+34) + 126 = 198; card_h = 198 + 168 + 16 = 382
         h = 80           # header
-        if not data.rain_now:
+        if data.rain_now:
+            h += 96          # rain now banner
+        else:
             h += 20 + 382    # scale + status merged card
         if data.forecast_rows:
             h += 38 + 6 + len(data.forecast_rows) * 56 + 20
@@ -276,6 +280,32 @@ class RouteCardRenderer:
                        size=17, align='right', color=self.GRAY)
 
         return y0 + 20 + card_h
+
+    # ── Section: rain now banner ─────────────────────────────────────────────
+
+    def _draw_rain_now_section(self, ctx, y0: int) -> int:
+        """Крупная надпись 'идёт дождь' — показывается вместо шкалы."""
+        pad = self.H_PAD
+        cy  = y0 + 56   # вертикальный центр текста
+
+        # Эмодзи через Noto Color Emoji (если есть), затем текст через Noto Sans
+        ctx.set_source_rgb(*self._RAIN_COLOR)
+        ctx.select_font_face("Noto Color Emoji", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        ctx.set_font_size(42)
+        ctx.move_to(pad + 4, cy)
+        ctx.show_text("🌧")
+
+        # Ширина эмодзи-символа для отступа
+        xb, _, tw, _, _, _ = ctx.text_extents("🌧")
+        emoji_w = tw + 12
+
+        ctx.set_source_rgb(*self.WHITE)
+        ctx.select_font_face("Noto Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(34)
+        ctx.move_to(pad + 4 + emoji_w, cy)
+        ctx.show_text("ДОЖДЬ СЕЙЧАС")
+
+        return y0 + 96   # высота секции
 
     # ── Section: forecast ─────────────────────────────────────────────────────
 
