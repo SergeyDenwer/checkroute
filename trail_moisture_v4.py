@@ -233,7 +233,7 @@ def fetch_weather_data(lat, lon, days_back=14):
 
 
 def fetch_forecast(lat, lon, days_ahead=16):
-    """Получаем прогноз погоды"""
+    """Получаем прогноз погоды. Retry с backoff при 429."""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -251,11 +251,19 @@ def fetch_forecast(lat, lon, days_ahead=16):
         "forecast_days": days_ahead,
         "timezone": "auto"
     }
-    
-    response = requests.get(url, params=params, timeout=15)
-    if response.status_code != 200:
+
+    for attempt in range(4):
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code == 429:
+            wait = 2 ** attempt  # 1, 2, 4, 8 секунд
+            logger.warning("fetch_forecast 429 rate-limit lat=%.4f lon=%.4f, retry in %ds (attempt %d/4)",
+                           lat, lon, wait, attempt + 1)
+            time.sleep(wait)
+            continue
         raise Exception(f"Forecast API Error: {response.status_code}")
-    return response.json()
+    raise Exception("Forecast API Error: 429 (exhausted retries)")
 
 
 def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index,
@@ -1014,10 +1022,18 @@ def forecast_trail_drying(results, verbose=True):
         print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
     
     all_forecasts = []
-    
+    _forecast_cache = {}  # (lat2, lon2) → forecast json
+
     for idx, point in enumerate(forecast_points):
         try:
-            forecast = fetch_forecast(point["lat"], point["lon"], days_ahead=16)
+            cache_key = (round(point["lat"], 2), round(point["lon"], 2))
+            if cache_key in _forecast_cache:
+                forecast = _forecast_cache[cache_key]
+                logger.debug("forecast_trail_drying: cache hit for key=%s (km=%.1f)",
+                             cache_key, point.get("distance_km", 0))
+            else:
+                forecast = fetch_forecast(point["lat"], point["lon"], days_ahead=16)
+                _forecast_cache[cache_key] = forecast
             
             initial_state = {
                 "moisture":    point["moisture"],
