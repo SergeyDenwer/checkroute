@@ -31,6 +31,7 @@ from trail_moisture_v4 import (
     fetch_weather_data,
     fetch_surface_type,
     fetch_surface_types_batch,
+    fetch_surface_and_forest_batch,
     fetch_weather_data_batch,
     fetch_forest_flags_batch,
     fetch_aspect_batch,
@@ -193,15 +194,11 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
-    # Фаза 1а: типы покрытий (один запрос к Overpass)
-    await message.edit_text(header + f"🗺 Запрашиваю типы покрытий для {total} точек...")
-    surfaces = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+    # Фаза 1а: покрытия + лесной полог — один запрос к Overpass вместо двух
+    await message.edit_text(header + f"🗺 Запрашиваю покрытия и лесной полог для {total} точек...")
+    surfaces, forest_flags = await asyncio.to_thread(fetch_surface_and_forest_batch, lat_lon_pairs)
 
-    # Фаза 1б: лесной полог (один батч-запрос к Overpass по bbox маршрута)
-    await message.edit_text(header + "🌲 Проверяю лесной полог...")
-    forest_flags = await asyncio.to_thread(fetch_forest_flags_batch, lat_lon_pairs)
-
-    # Фаза 1в: аспект склона из SRTM DEM (Open-Elevation, один батч POST)
+    # Фаза 1б: аспект склона из SRTM DEM (Open-Elevation, один батч POST)
     await message.edit_text(header + "🧭 Определяю ориентацию склонов (DEM)...")
     aspect_degs = await asyncio.to_thread(fetch_aspect_batch, lat_lon_pairs)
 
@@ -379,9 +376,8 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     # Текущее состояние по каждой точке — батч-вызовы вместо N*2
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
-    surfaces     = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
-    forest_flags = await asyncio.to_thread(fetch_forest_flags_batch,  lat_lon_pairs)
-    aspect_degs  = await asyncio.to_thread(fetch_aspect_batch,        lat_lon_pairs)
+    surfaces, forest_flags = await asyncio.to_thread(fetch_surface_and_forest_batch, lat_lon_pairs)
+    aspect_degs            = await asyncio.to_thread(fetch_aspect_batch,             lat_lon_pairs)
 
     unpaved_indices = [
         i for i, s in enumerate(surfaces)
