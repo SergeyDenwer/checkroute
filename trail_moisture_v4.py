@@ -633,6 +633,65 @@ def fetch_forecast_batch(lat_lon_pairs: list, days_ahead: int = 16) -> list:
     return data if isinstance(data, list) else [data]
 
 
+def check_current_rain_batch(lat_lon_pairs: list, threshold_mm: float = 0.3) -> tuple:
+    """
+    Проверяет, идёт ли дождь прямо сейчас или в ближайшие 2 часа.
+    Делает один батч-запрос к Open-Meteo forecast (hourly precipitation).
+    Возвращает (is_raining: bool, avg_mm: float) — среднее по точкам за 3 часа.
+    threshold_mm — суммарное количество осадков за 3 часа для срабатывания.
+    """
+    if not lat_lon_pairs:
+        return False, 0.0
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude":  ",".join(str(lat) for lat, lon in lat_lon_pairs),
+        "longitude": ",".join(str(lon) for lat, lon in lat_lon_pairs),
+        "hourly":    "precipitation",
+        "forecast_days": 2,   # сегодня + завтра, чтобы покрыть ближайшие 2 ч после полуночи
+        "timezone":  "auto",
+    }
+
+    try:
+        data = _http_get_retry(url, params=params, timeout=30).json()
+        if not isinstance(data, list):
+            data = [data]
+
+        now = datetime.now()
+        current_hour_str = now.strftime("%Y-%m-%dT%H:00")
+
+        total_precip = 0.0
+        valid_points = 0
+
+        for point_data in data:
+            hourly = point_data.get("hourly", {})
+            times  = hourly.get("time", [])
+            precip = hourly.get("precipitation", [])
+            try:
+                cur_idx = times.index(current_hour_str)
+            except ValueError:
+                logger.debug("check_current_rain: hour %s not found in forecast times", current_hour_str)
+                continue
+            point_sum = 0.0
+            for offset in range(3):   # текущий час + следующие 2
+                idx = cur_idx + offset
+                if idx < len(precip) and precip[idx] is not None:
+                    point_sum += precip[idx]
+            total_precip += point_sum
+            valid_points += 1
+
+        if valid_points == 0:
+            return False, 0.0
+
+        avg_mm = total_precip / valid_points
+        logger.info("check_current_rain: avg %.2f mm (3h window) across %d points", avg_mm, valid_points)
+        return avg_mm >= threshold_mm, avg_mm
+
+    except Exception as e:
+        logger.warning("check_current_rain_batch error: %s", e)
+        return False, 0.0
+
+
 def fetch_surface_type(lat: float, lon: float) -> str:
     """
     Тип покрытия OSM для точки.
