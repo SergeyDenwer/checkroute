@@ -370,6 +370,165 @@ def _overpass_wait_for_slot(timeout: int = 60) -> bool:
     return False
 
 
+def fetch_surface_types_batch(lat_lon_pairs: list) -> list:
+    """
+    Один Overpass-запрос для всех точек разом (union around-queries).
+    Возвращает список поверхностей в том же порядке, что и входные точки.
+    """
+    if not lat_lon_pairs:
+        return []
+
+    clauses = "".join(
+        f"way(around:30,{lat},{lon})[highway];"
+        for lat, lon in lat_lon_pairs
+    )
+    query = f"[out:json][timeout:90];({clauses});out body geom;"
+
+    if not _overpass_wait_for_slot(timeout=90):
+        logger.warning("fetch_surface_types_batch: no Overpass slot → all error")
+        return ["error"] * len(lat_lon_pairs)
+
+    elements = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=90)
+        except Exception as e:
+            logger.warning("fetch_surface_types_batch exception attempt %d: %s", attempt + 1, e)
+            return ["error"] * len(lat_lon_pairs)
+
+        if resp.status_code == 429:
+            logger.warning("fetch_surface_types_batch: 429, waiting for slot...")
+            if not _overpass_wait_for_slot(timeout=90):
+                return ["error"] * len(lat_lon_pairs)
+            continue
+
+        if resp.status_code in (503, 504):
+            wait = 5 * (attempt + 1)
+            logger.warning("fetch_surface_types_batch HTTP %s, retry in %ds", resp.status_code, wait)
+            time.sleep(wait)
+            continue
+
+        if resp.status_code != 200:
+            logger.warning("fetch_surface_types_batch HTTP %s → all error", resp.status_code)
+            return ["error"] * len(lat_lon_pairs)
+
+        elements = resp.json().get("elements", [])
+        break
+
+    if elements is None:
+        return ["error"] * len(lat_lon_pairs)
+
+    results = [
+        _find_surface_for_point(lat, lon, elements, radius_m=30)
+        for lat, lon in lat_lon_pairs
+    ]
+    return results
+
+
+def _find_surface_for_point(lat: float, lon: float, ways: list, radius_m: float) -> str:
+    """Определяет тип покрытия для точки по предзагруженным OSM way-элементам с геометрией."""
+    nearby = []
+    for el in ways:
+        geom = el.get("geometry", [])
+        if not geom:
+            continue
+        min_dist_km = min(
+            haversine_distance(lat, lon, node["lat"], node["lon"])
+            for node in geom
+        )
+        if min_dist_km * 1000 <= radius_m:
+            nearby.append((min_dist_km, el))
+
+    if not nearby:
+        logger.debug("_find_surface (%.5f, %.5f) no ways within %dm → ground", lat, lon, radius_m)
+        return "ground"
+
+    nearby.sort(key=lambda x: x[0])
+    logger.debug("_find_surface (%.5f, %.5f) ways=%s", lat, lon,
+                 [(el["tags"].get("highway"), el["tags"].get("surface")) for _, el in nearby])
+
+    for _, el in nearby:
+        if "surface" in el.get("tags", {}):
+            result = el["tags"]["surface"]
+            logger.info("_find_surface (%.5f, %.5f) surface_tag=%s", lat, lon, result)
+            return result
+
+    for _, el in nearby:
+        hw = el.get("tags", {}).get("highway")
+        if hw in _PAVED_HIGHWAY_TYPES:
+            logger.info("_find_surface (%.5f, %.5f) highway=%s → asphalt", lat, lon, hw)
+            return "asphalt"
+
+    hw_types = [el.get("tags", {}).get("highway") for _, el in nearby]
+    logger.info("_find_surface (%.5f, %.5f) highway=%s → ground", lat, lon, hw_types)
+    return "ground"
+
+
+def fetch_weather_data_batch(lat_lon_pairs: list, days_back: int = 14) -> list:
+    """
+    Open-Meteo archive API: один запрос для всех точек (CSV координаты).
+    Возвращает список weather-dict'ов в том же порядке.
+    """
+    if not lat_lon_pairs:
+        return []
+
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": ",".join(str(lat) for lat, lon in lat_lon_pairs),
+        "longitude": ",".join(str(lon) for lat, lon in lat_lon_pairs),
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": ",".join([
+            "temperature_2m_mean",
+            "rain_sum",
+            "snowfall_sum",
+            "et0_fao_evapotranspiration",
+        ]),
+        "timezone": "auto",
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+    if response.status_code != 200:
+        raise Exception(f"Weather batch API Error: {response.status_code}")
+
+    data = response.json()
+    return data if isinstance(data, list) else [data]
+
+
+def fetch_forecast_batch(lat_lon_pairs: list, days_ahead: int = 16) -> list:
+    """
+    Open-Meteo forecast API: один запрос для всех точек (CSV координаты).
+    Возвращает список forecast-dict'ов в том же порядке.
+    """
+    if not lat_lon_pairs:
+        return []
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": ",".join(str(lat) for lat, lon in lat_lon_pairs),
+        "longitude": ",".join(str(lon) for lat, lon in lat_lon_pairs),
+        "daily": ",".join([
+            "temperature_2m_max",
+            "temperature_2m_min",
+            "rain_sum",
+            "snowfall_sum",
+            "et0_fao_evapotranspiration",
+        ]),
+        "forecast_days": days_ahead,
+        "timezone": "auto",
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+    if response.status_code != 200:
+        raise Exception(f"Forecast batch API Error: {response.status_code}")
+
+    data = response.json()
+    return data if isinstance(data, list) else [data]
+
+
 def fetch_surface_type(lat: float, lon: float) -> str:
     """
     Тип покрытия OSM для точки.
@@ -488,16 +647,37 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
         print(f"   Точек для анализа: {len(sampled)} (каждые {sample_km} км)")
         print()
     
-    # Анализ каждой точки
+    # Батч-запрос поверхностей и погоды — по одному API-вызову на всё
+    lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
+
+    if verbose:
+        print(f"   Запрашиваю типы покрытий для {len(sampled)} точек (batch Overpass)...")
+    surfaces = fetch_surface_types_batch(lat_lon_pairs)
+
+    if verbose:
+        print(f"   Запрашиваю погоду для {len(sampled)} точек (batch Open-Meteo)...")
+    try:
+        weather_batch = fetch_weather_data_batch(lat_lon_pairs, days_back=14)
+    except Exception as e:
+        if verbose:
+            print(f"   ⚠️ Ошибка батч-погоды: {e}")
+        weather_batch = [None] * len(sampled)
+
+    if verbose:
+        print()
+
+    # Анализ каждой точки (чистые вычисления, без сетевых вызовов)
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         if verbose:
             print(f"   [{idx+1}/{len(sampled)}] км {dist_km:.1f}: ({lat:.4f}, {lon:.4f})...", end=" ", flush=True)
-        
+
         try:
-            surface = fetch_surface_type(lat, lon)
+            surface = surfaces[idx]
+            weather = weather_batch[idx]
+            if weather is None:
+                raise Exception("нет данных погоды")
             soil_params = apply_surface_modifiers(SOIL_PARAMS, surface)
-            weather = fetch_weather_data(lat, lon, days_back=14)
             state = simulate_moisture(weather, soil_params)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
 
@@ -514,10 +694,10 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
                 "status_label": status_label,
                 "status_key": status_key,
             })
-            
+
             if verbose:
                 print(f"{status_label} ({state['moisture']:.1f}мм)")
-        
+
         except Exception as e:
             if verbose:
                 print(f"⚠️ Ошибка: {e}")
@@ -567,11 +747,22 @@ def forecast_trail_drying(results, verbose=True):
         print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам...")
     
     all_forecasts = []
-    
-    for idx, point in enumerate(forecast_points):
+
+    # Батч-запрос прогноза для всех точек — один вызов API вместо N
+    lat_lon_pairs = [(p["lat"], p["lon"]) for p in forecast_points]
+    try:
+        forecasts_data = fetch_forecast_batch(lat_lon_pairs, days_ahead=16)
+    except Exception as e:
+        if verbose:
+            print(f"   ⚠️ Ошибка батч-прогноза: {e}")
+        forecasts_data = [None] * len(forecast_points)
+
+    for idx, (point, forecast) in enumerate(zip(forecast_points, forecasts_data)):
+        if forecast is None:
+            if verbose:
+                print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ⚠️ нет данных")
+            continue
         try:
-            forecast = fetch_forecast(point["lat"], point["lon"], days_ahead=16)
-            
             initial_state = {
                 "moisture": point["moisture"],
                 "capacity": point["capacity"],
@@ -584,10 +775,10 @@ def forecast_trail_drying(results, verbose=True):
                 "point": point,
                 "forecast": forecast_results,
             })
-            
+
             if verbose:
                 print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ✓")
-        
+
         except Exception as e:
             if verbose:
                 print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ⚠️ {e}")

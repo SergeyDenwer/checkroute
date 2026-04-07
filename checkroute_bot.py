@@ -30,6 +30,8 @@ from trail_moisture_v4 import (
     sample_points_by_distance,
     fetch_weather_data,
     fetch_surface_type,
+    fetch_surface_types_batch,
+    fetch_weather_data_batch,
     apply_surface_modifiers,
     simulate_moisture,
     get_status,
@@ -182,59 +184,83 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     results = []
     errors = 0
     skipped_paved = 0
+
+    lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
+
+    # Фаза 1: типы покрытий (один запрос к Overpass)
+    await message.edit_text(header + f"🗺 Запрашиваю типы покрытий для {total} точек...")
+    surfaces = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+
+    # Фаза 2: погода только для грунтовых точек (один запрос к Open-Meteo)
+    unpaved_indices = [
+        i for i, s in enumerate(surfaces)
+        if s not in PAVED_SURFACES and s != "error"
+    ]
+    unpaved_pairs = [lat_lon_pairs[i] for i in unpaved_indices]
+
+    weather_by_index: dict = {}
+    if unpaved_pairs:
+        await message.edit_text(
+            header + f"🌦 Запрашиваю погоду для {len(unpaved_pairs)}/{total} грунтовых точек..."
+        )
+        try:
+            weather_batch = await asyncio.to_thread(
+                fetch_weather_data_batch, unpaved_pairs, 14
+            )
+            for list_pos, orig_idx in enumerate(unpaved_indices):
+                weather_by_index[orig_idx] = weather_batch[list_pos]
+        except Exception as e:
+            logger.warning("Weather batch error: %s", e)
+
+    # Фаза 3: симуляция (чистые вычисления)
+    await message.edit_text(header + "🔬 Симулирую влажность...")
     progress_lines: list[str] = []
 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
+        surface = surfaces[idx]
         try:
-            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
             if surface == "error":
                 skipped_paved += 1
                 progress_lines.append(f"  км {dist_km:.1f} — ⚠️ нет данных OSM")
-            elif surface in PAVED_SURFACES:
+                continue
+            if surface in PAVED_SURFACES:
                 skipped_paved += 1
                 progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} (пропущено)")
-            if surface not in PAVED_SURFACES and surface != "error":
-                weather = fetch_weather_data(lat, lon, days_back=14)
-                point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
-                state = simulate_moisture(weather, point_soil)
-                status_label, status_key = get_status(state["moisture"], state["capacity"])
-                logger.info(
-                    "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
-                    "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
-                    dist_km, surface,
-                    point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
-                    state["moisture"], state["capacity"], state["snow_cover"],
-                    status_key,
-                )
-                results.append({
-                    "lat": lat, "lon": lon, "elevation": elev,
-                    "distance_km": dist_km,
-                    "moisture": state["moisture"],
-                    "capacity": state["capacity"],
-                    "wet_index": state["wet_index"],
-                    "snow_cover": state["snow_cover"],
-                    "surface": surface,
-                    "status_label": status_label,
-                    "status_key": status_key,
-                })
-                progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} → {status_label}")
+                continue
+
+            weather = weather_by_index.get(idx)
+            if weather is None:
+                errors += 1
+                progress_lines.append(f"  км {dist_km:.1f} — ❌ нет данных погоды")
+                continue
+
+            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
+            state = simulate_moisture(weather, point_soil)
+            status_label, status_key = get_status(state["moisture"], state["capacity"])
+            logger.info(
+                "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
+                dist_km, surface,
+                point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
+                state["moisture"], state["capacity"], state["snow_cover"],
+                status_key,
+            )
+            results.append({
+                "lat": lat, "lon": lon, "elevation": elev,
+                "distance_km": dist_km,
+                "moisture": state["moisture"],
+                "capacity": state["capacity"],
+                "wet_index": state["wet_index"],
+                "snow_cover": state["snow_cover"],
+                "surface": surface,
+                "status_label": status_label,
+                "status_key": status_key,
+            })
+            progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} → {status_label}")
         except Exception as e:
             errors += 1
             logger.warning(f"Point {idx} error: {e}")
             progress_lines.append(f"  км {dist_km:.1f} — ❌ ошибка")
-
-        done = idx + 1
-        bar = "▓" * done + "░" * (total - done)
-        log_tail = "\n".join(progress_lines[-5:])  # последние 5 строк чтобы не вылезти за лимит
-        try:
-            await message.edit_text(
-                header
-                + f"🔬 Анализирую точку {done}/{total}\n"
-                + f"[{bar}]\n"
-                + log_tail
-            )
-        except Exception:
-            pass  # TelegramError (flood/not modified) — не критично
 
     if not results:
         return None, "❌ Не удалось получить данные погоды ни для одной точки"
@@ -318,13 +344,33 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
     total = len(sampled)
 
-    # Текущее состояние по каждой точке
+    # Текущее состояние по каждой точке — три батч-вызова вместо N*2
+    lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
+
+    surfaces = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+
+    unpaved_indices = [
+        i for i, s in enumerate(surfaces)
+        if s not in PAVED_SURFACES and s != "error"
+    ]
+    unpaved_pairs = [lat_lon_pairs[i] for i in unpaved_indices]
+
+    weather_by_index: dict = {}
+    if unpaved_pairs:
+        try:
+            weather_batch = await asyncio.to_thread(
+                fetch_weather_data_batch, unpaved_pairs, 14
+            )
+            for list_pos, orig_idx in enumerate(unpaved_indices):
+                weather_by_index[orig_idx] = weather_batch[list_pos]
+        except Exception as e:
+            logger.warning("batch weather error for route %s: %s", gpx_path, e)
+
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
-        surface = None
+        surface = surfaces[idx]
         status_label = None
         try:
-            surface = await asyncio.to_thread(fetch_surface_type, lat, lon)
             if surface == "error":
                 if on_progress:
                     await on_progress(idx + 1, total, dist_km, "error", None)
@@ -333,7 +379,13 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
                 if on_progress:
                     await on_progress(idx + 1, total, dist_km, surface, None)
                 continue
-            weather = fetch_weather_data(lat, lon, days_back=14)
+
+            weather = weather_by_index.get(idx)
+            if weather is None:
+                if on_progress:
+                    await on_progress(idx + 1, total, dist_km, surface, None)
+                continue
+
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
