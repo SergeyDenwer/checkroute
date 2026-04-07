@@ -54,14 +54,13 @@ _log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
 logging.basicConfig(
     format=_LOG_FORMAT,
     level=logging.INFO,
+    # Только файл — избегаем дублей когда stdout редиректится в тот же файл
     handlers=[
-        # Консоль — для systemd/docker
-        logging.StreamHandler(),
-        # Файл — ротация: 5 МБ × 3 файла = max 15 МБ
         logging.handlers.RotatingFileHandler(
             _log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
         ),
     ],
+    force=True,  # перезаписываем хендлеры если telegram/httpx уже что-то добавили
 )
 
 # trail_moisture_v4 пишет DEBUG-детали по факторам радиации/ветра — включаем

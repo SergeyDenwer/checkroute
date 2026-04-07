@@ -222,6 +222,7 @@ def fetch_weather_data(lat, lon, days_back=14):
             "shortwave_radiation_sum",
             "wind_speed_10m_mean",
         ]),
+        "wind_speed_unit": "ms",
         "timezone": "auto"
     }
 
@@ -246,6 +247,7 @@ def fetch_forecast(lat, lon, days_ahead=16):
             "shortwave_radiation_sum",
             "wind_speed_10m_mean",
         ]),
+        "wind_speed_unit": "ms",
         "forecast_days": days_ahead,
         "timezone": "auto"
     }
