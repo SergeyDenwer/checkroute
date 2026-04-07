@@ -134,6 +134,72 @@ def get_point_at_distance(points, target_dist_km):
 
 
 
+def _http_get_retry(url, params=None, timeout=60, max_retries=10, base_delay=2):
+    """
+    GET-запрос с экспоненциальным backoff. Долбит до победного.
+    Ретраит на 429 / 503 / 504 / timeout / сетевые ошибки.
+    На не-ретраишных кодах (4xx кроме 429) сразу бросает исключение.
+    max_retries=10: суммарное ожидание до ~6 минут при цепочке неудач.
+    """
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code == 200:
+                return resp
+            if resp.status_code in (429, 503, 504):
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning("GET %s HTTP %s, retry %d/%d через %ds",
+                               url.split("?")[0], resp.status_code,
+                               attempt + 1, max_retries, delay)
+                time.sleep(delay)
+                continue
+            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except requests.exceptions.Timeout:
+            delay = min(base_delay * (2 ** attempt), 120)
+            logger.warning("GET %s timeout, retry %d/%d через %ds",
+                           url.split("?")[0], attempt + 1, max_retries, delay)
+            time.sleep(delay)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning("GET %s: %s, retry %d/%d через %ds",
+                               url.split("?")[0], e, attempt + 1, max_retries, delay)
+                time.sleep(delay)
+            else:
+                raise
+    raise Exception(f"GET {url.split('?')[0]} не ответил за {max_retries} попыток")
+
+
+def _http_post_retry(url, json=None, data=None, timeout=60, max_retries=8, base_delay=2):
+    """POST-запрос с экспоненциальным backoff."""
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(url, json=json, data=data, timeout=timeout)
+            if resp.status_code == 200:
+                return resp
+            if resp.status_code in (429, 503, 504):
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning("POST %s HTTP %s, retry %d/%d через %ds",
+                               url, resp.status_code, attempt + 1, max_retries, delay)
+                time.sleep(delay)
+                continue
+            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except requests.exceptions.Timeout:
+            delay = min(base_delay * (2 ** attempt), 120)
+            logger.warning("POST %s timeout, retry %d/%d через %ds",
+                           url, attempt + 1, max_retries, delay)
+            time.sleep(delay)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning("POST %s: %s, retry %d/%d через %ds",
+                               url, e, attempt + 1, max_retries, delay)
+                time.sleep(delay)
+            else:
+                raise
+    raise Exception(f"POST {url} не ответил за {max_retries} попыток")
+
+
 def fetch_weather_data(lat, lon, days_back=14):
     """Получаем данные погоды из Open-Meteo"""
     end_date = datetime.now().strftime("%Y-%m-%d")
@@ -154,10 +220,7 @@ def fetch_weather_data(lat, lon, days_back=14):
         "timezone": "auto"
     }
     
-    response = requests.get(url, params=params, timeout=15)
-    if response.status_code != 200:
-        raise Exception(f"API Error: {response.status_code}")
-    return response.json()
+    return _http_get_retry(url, params=params, timeout=30).json()
 
 
 def fetch_forecast(lat, lon, days_ahead=16):
@@ -178,10 +241,7 @@ def fetch_forecast(lat, lon, days_ahead=16):
         "timezone": "auto"
     }
 
-    response = requests.get(url, params=params, timeout=15)
-    if response.status_code != 200:
-        raise Exception(f"Forecast API Error: {response.status_code}")
-    return response.json()
+    return _http_get_retry(url, params=params, timeout=30).json()
 
 
 def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cover, wet_index,
@@ -208,6 +268,8 @@ def _simulate_day(temp_mean, rain, snowfall_cm, eto, surface_moisture, snow_cove
     Максимальный бонус 0.2 мм/день при ветре ≥8 м/с, только первые 5 суток Stage 2.
 
     wet_index ∈ [0, 1] — экспоненциальная память о последних дождях.
+    После фикса Stage 2 (переход на stage2_days) wet_index НЕ участвует в расчёте
+    испарения. Вычисляется и сохраняется как диагностическая метрика (UI, логи).
     """
     DESORPTIVITY      = soil_params["desorptivity"]
     CAPACITY          = soil_params["capacity"]
@@ -539,11 +601,7 @@ def fetch_weather_data_batch(lat_lon_pairs: list, days_back: int = 14) -> list:
         "timezone": "auto",
     }
 
-    response = requests.get(url, params=params, timeout=30)
-    if response.status_code != 200:
-        raise Exception(f"Weather batch API Error: {response.status_code}")
-
-    data = response.json()
+    data = _http_get_retry(url, params=params, timeout=60).json()
     return data if isinstance(data, list) else [data]
 
 
@@ -571,11 +629,7 @@ def fetch_forecast_batch(lat_lon_pairs: list, days_ahead: int = 16) -> list:
         "timezone": "auto",
     }
 
-    response = requests.get(url, params=params, timeout=30)
-    if response.status_code != 200:
-        raise Exception(f"Forecast batch API Error: {response.status_code}")
-
-    data = response.json()
+    data = _http_get_retry(url, params=params, timeout=60).json()
     return data if isinstance(data, list) else [data]
 
 
@@ -646,7 +700,8 @@ def fetch_surface_type(lat: float, lon: float) -> str:
 def apply_surface_modifiers(soil_params: dict, surface: str,
                             is_forest: bool = False,
                             slope_deg: float = 0.0,
-                            aspect_deg: float = None) -> dict:
+                            aspect_deg: float = None,
+                            terrain_slope_deg: float = None) -> dict:
     """
     Возвращает копию soil_params, скорректированную под тип покрытия,
     растительный полог, уклон и аспект склона.
@@ -678,18 +733,25 @@ def apply_surface_modifiers(soil_params: dict, surface: str,
         E/W     → 3.00
         Источник: Rango & Martinec (1995)
 
-    На плоском рельефе (slope_deg < 3°) аспект не имеет физического смысла —
-    коэффициенты плавно занижаются до 1.0/3.0 по мере выполаживания.
+    terrain_slope_deg — уклон рельефа из DEM (возвращается fetch_aspect_batch вместе с
+    аспектом). Используется как вес аспект-коэффициентов вместо along-track slope_deg,
+    потому что трек может идти по горизонтальному контуру (slope_deg=0°) при явном
+    аспекте склона — в таком случае along-track slope подавлял бы эффект аспекта.
+    Если terrain_slope_deg не задан — фолбэк на slope_deg.
     """
     mods = SURFACE_SOIL_MODIFIERS.get(surface, {"capacity_mult": 1.0, "desorptivity_mult": 1.0, "snow_factor": 1.0})
 
-    # Уклон → дренаж → ёмкость
+    # Уклон → дренаж → ёмкость (вдоль трека, из GPX)
     slope_drainage = 1.0 + math.sin(math.radians(max(0.0, slope_deg))) * 1.5
+
+    # Для аспект-веса используем terrain_slope_deg (DEM) если доступен,
+    # иначе along-track slope_deg (GPX)
+    weight_slope = terrain_slope_deg if terrain_slope_deg is not None else slope_deg
 
     # Аспект-коэффициенты (непрерывная косинусная формула)
     if aspect_deg is not None:
-        # Плавное затухание на равнине: slope_deg=0° → weight=0, slope_deg≥5° → weight=1
-        aspect_weight = min(1.0, slope_deg / 5.0)
+        # Плавное затухание на равнине: DEM slope=0° → weight=0, slope≥5° → weight=1
+        aspect_weight = min(1.0, weight_slope / 5.0)
         cos_a         = math.cos(math.radians(aspect_deg))
         eto_aspect    = 1.0 + aspect_weight * (-0.4 * cos_a)   # 0.6 .. 1.4
         ddf_aspect    = 3.0 + aspect_weight * (-1.5 * cos_a)   # 1.5 .. 4.5
@@ -709,12 +771,16 @@ def apply_surface_modifiers(soil_params: dict, surface: str,
         rain_factor  = 1.0
         desorpt_mult = 1.0
 
+    # Нижний лимит eto_factor: даже в самых неблагоприятных условиях
+    # (плотный полог + северный склон) испарение не обнуляется полностью
+    combined_eto = max(0.15, eto_forest * eto_aspect)
+
     result = {
         **soil_params,
         "capacity":          soil_params["capacity"]     * mods["capacity_mult"] / slope_drainage,
         "desorptivity":      soil_params["desorptivity"] * mods["desorptivity_mult"] * desorpt_mult,
         "snow_factor":       mods.get("snow_factor", 1.0),
-        "eto_factor":        eto_forest * eto_aspect,   # лес × аспект
+        "eto_factor":        combined_eto,   # лес × аспект, ≥ 0.15
         "rain_factor":       rain_factor,
         "degree_day_factor": ddf_aspect,
         "is_forest":         is_forest,
@@ -761,30 +827,45 @@ def fetch_forest_flags_batch(lat_lon_pairs: list) -> list:
     # bbox с небольшим отступом для захвата граничных полигонов
     bbox = f"{min(lats)-0.01},{min(lons)-0.01},{max(lats)+0.01},{max(lons)+0.01}"
 
-    query = f"""[out:json][timeout:60];
+    # Запрашиваем:
+    # 1. Напрямую tagged ways (небольшие лесополосы, городские леса)
+    # 2. Relations — крупные лесные массивы (Россия, Скандинавия, Беларусь)
+    #    → рекурсивно разворачиваем в member ways для получения геометрии
+    query = f"""[out:json][timeout:90];
+(
+  relation[natural=wood]({bbox});
+  relation[landuse=forest]({bbox});
+)->.forest_rels;
 (
   way[natural=wood]({bbox});
   way[landuse=forest]({bbox});
-);out body geom;"""
+  way(r.forest_rels);
+);
+out body geom;"""
 
     if not _overpass_wait_for_slot(timeout=90):
         logger.warning("fetch_forest_flags_batch: no Overpass slot → all False")
         return [False] * len(lat_lon_pairs)
 
     elements = None
-    for attempt in range(3):
+    for attempt in range(5):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=60)
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=90)
         except Exception as e:
-            logger.warning("fetch_forest_flags_batch exception: %s", e)
-            return [False] * len(lat_lon_pairs)
+            delay = min(5 * (attempt + 1), 30)
+            logger.warning("fetch_forest_flags_batch exception attempt %d: %s, retry in %ds",
+                           attempt + 1, e, delay)
+            time.sleep(delay)
+            continue
 
         if resp.status_code == 429:
             if not _overpass_wait_for_slot(timeout=90):
                 return [False] * len(lat_lon_pairs)
             continue
         if resp.status_code in (503, 504):
-            time.sleep(5 * (attempt + 1))
+            delay = min(5 * (attempt + 1), 60)
+            logger.warning("fetch_forest_flags_batch HTTP %s, retry in %ds", resp.status_code, delay)
+            time.sleep(delay)
             continue
         if resp.status_code != 200:
             logger.warning("fetch_forest_flags_batch HTTP %s → all False", resp.status_code)
@@ -876,79 +957,82 @@ OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
 
 def fetch_aspect_batch(lat_lon_pairs: list) -> list:
     """
-    Вычисляет аспект склона (градусы от севера, по часовой стрелке) для каждой точки
-    по SRTM DEM 90м через Open-Elevation API.
+    Вычисляет аспект и уклон рельефа (не трека) для каждой точки по SRTM DEM 90м
+    через Open-Elevation API (бесплатно, без ключа).
 
-    Для каждой точки делает 3 elevation-запроса:
-      center (lat, lon), north (+100м), east (+100м)
-    Из градиента высот вычисляет направление падения склона (аспект):
-      dz/dy = (elev_N − elev_C) / 100
-      dz/dx = (elev_E − elev_C) / 100
-      aspect = atan2(−dz/dx, −dz/dy)  ← направление «вниз»
+    Для каждой точки запрашивает 3 высоты: center, north +100м, east +100м.
+    LON_OFFSET корректируется по широте: lon_offset = lat_offset / cos(lat),
+    чтобы оба смещения были физически ~100м независимо от широты.
 
-    Все точки запрашиваются одним POST-батчем.
-    При недоступности API возвращает all-None (→ нейтральные коэффициенты).
+    Из градиента высот:
+      dz/dy = (elev_N − elev_C) / 100   [м/м, направление север]
+      dz/dx = (elev_E − elev_C) / 100   [м/м, направление восток]
+      aspect         = atan2(−dz/dx, −dz/dy) mod 360   [°, направление «вниз»]
+      terrain_slope  = degrees(atan(sqrt(dz_dy²+dz_dx²)))  [°, крутизна рельефа]
 
-    Источник коэффициентов аспекта: Rango & Martinec (1995), список Oke (1987).
+    Возвращает List[Optional[Tuple[float, float]]]:
+      (aspect_deg, terrain_slope_deg) — или None для плоского/недоступного рельефа.
+
+    terrain_slope_deg используется в apply_surface_modifiers как weight для
+    аспект-коэффициентов (вместо GPX along-track slope, который равен 0 при
+    траверсе горизонтального контура).
+
+    При ошибке API — all-None (→ нейтральные коэффициенты, не ломает симуляцию).
     """
     if not lat_lon_pairs:
         return []
 
-    # ~100м: 0.0009° широты ≈ 100м везде; 0.0013° долготы ≈ 100м на 45°N
-    LAT_OFFSET = 0.0009
-    LON_OFFSET = 0.0013
+    LAT_OFFSET = 0.0009   # ≈ 100м по широте (константа)
 
     locations = []
     for lat, lon in lat_lon_pairs:
+        # LON_OFFSET пересчитывается для каждой точки под фактическую широту
+        lon_offset = LAT_OFFSET / max(0.01, math.cos(math.radians(lat)))
         locations.append({"latitude": lat,              "longitude": lon})
         locations.append({"latitude": lat + LAT_OFFSET, "longitude": lon})
-        locations.append({"latitude": lat,              "longitude": lon + LON_OFFSET})
+        locations.append({"latitude": lat,              "longitude": lon + lon_offset})
 
     try:
-        resp = requests.post(
-            OPEN_ELEVATION_URL,
-            json={"locations": locations},
-            timeout=30,
-        )
+        resp = _http_post_retry(OPEN_ELEVATION_URL, json={"locations": locations}, timeout=30)
     except Exception as e:
-        logger.warning("fetch_aspect_batch: request failed: %s", e)
-        return [None] * len(lat_lon_pairs)
-
-    if resp.status_code != 200:
-        logger.warning("fetch_aspect_batch: HTTP %s", resp.status_code)
+        logger.warning("fetch_aspect_batch: все попытки провалились: %s", e)
         return [None] * len(lat_lon_pairs)
 
     raw = resp.json().get("results", [])
     if len(raw) != len(locations):
-        logger.warning("fetch_aspect_batch: unexpected result count %d vs %d",
-                       len(raw), len(locations))
+        logger.warning("fetch_aspect_batch: ожидали %d результатов, получили %d",
+                       len(locations), len(raw))
         return [None] * len(lat_lon_pairs)
 
-    aspects = []
-    for i in range(len(lat_lon_pairs)):
+    results = []
+    for i, (lat, lon) in enumerate(lat_lon_pairs):
         ec = raw[i * 3]["elevation"]
         en = raw[i * 3 + 1]["elevation"]
         ee = raw[i * 3 + 2]["elevation"]
 
         if ec is None or en is None or ee is None:
-            aspects.append(None)
+            results.append(None)
             continue
 
-        dz_dy = (en - ec) / 100.0   # м/м на север
-        dz_dx = (ee - ec) / 100.0   # м/м на восток
+        lon_offset = LAT_OFFSET / max(0.01, math.cos(math.radians(lat)))
+        horiz_m    = lon_offset * 111320  # метров на 1° долготы × смещение в °
 
-        if abs(dz_dy) < 1e-4 and abs(dz_dx) < 1e-4:
-            # Плоский рельеф — аспект не определён
-            aspects.append(None)
+        dz_dy = (en - ec) / 100.0         # м/м на север (100м фиксировано)
+        dz_dx = (ee - ec) / horiz_m       # м/м на восток (реальное расстояние)
+
+        gradient_mag = math.sqrt(dz_dy ** 2 + dz_dx ** 2)
+
+        if gradient_mag < 1e-4:
+            results.append(None)   # плоский рельеф
             continue
 
-        # Направление «вниз по склону» от севера, по часовой стрелке
-        aspect = math.degrees(math.atan2(-dz_dx, -dz_dy)) % 360
-        aspects.append(round(aspect, 1))
+        aspect        = math.degrees(math.atan2(-dz_dx, -dz_dy)) % 360
+        terrain_slope = math.degrees(math.atan(gradient_mag))
+        results.append((round(aspect, 1), round(terrain_slope, 1)))
 
-    n_valid = sum(1 for a in aspects if a is not None)
-    logger.info("fetch_aspect_batch: %d/%d valid aspects", n_valid, len(lat_lon_pairs))
-    return aspects
+    n_valid = sum(1 for r in results if r is not None)
+    logger.info("fetch_aspect_batch: %d/%d valid (aspect, slope)", n_valid, len(lat_lon_pairs))
+    return results
 
 
 def get_status(moisture, capacity):
@@ -990,8 +1074,7 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
     if verbose:
         print(f"   Точек для анализа: {len(sampled)} (каждые {sample_km} км)")
         print()
-    
-    # Батч-запрос поверхностей и погоды — по одному API-вызову на всё
+
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
     if verbose:
@@ -999,13 +1082,19 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
     surfaces = fetch_surface_types_batch(lat_lon_pairs)
 
     if verbose:
+        print(f"   Запрашиваю лесной полог (batch Overpass bbox)...")
+    forest_flags = fetch_forest_flags_batch(lat_lon_pairs)
+
+    if verbose:
+        print(f"   Запрашиваю аспект склонов (SRTM DEM)...")
+    aspect_results = fetch_aspect_batch(lat_lon_pairs)
+
+    if verbose:
         print(f"   Запрашиваю погоду для {len(sampled)} точек (batch Open-Meteo)...")
-    try:
-        weather_batch = fetch_weather_data_batch(lat_lon_pairs, days_back=14)
-    except Exception as e:
-        if verbose:
-            print(f"   ⚠️ Ошибка батч-погоды: {e}")
-        weather_batch = [None] * len(sampled)
+    weather_batch = fetch_weather_data_batch(lat_lon_pairs, days_back=14)
+
+    # Уклон из GPX-профиля
+    slope_degs = compute_slopes_for_sampled(points, sampled)
 
     if verbose:
         print()
@@ -1017,26 +1106,39 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
             print(f"   [{idx+1}/{len(sampled)}] км {dist_km:.1f}: ({lat:.4f}, {lon:.4f})...", end=" ", flush=True)
 
         try:
-            surface = surfaces[idx]
-            weather = weather_batch[idx]
+            surface   = surfaces[idx]
+            weather   = weather_batch[idx]
             if weather is None:
                 raise Exception("нет данных погоды")
-            soil_params = apply_surface_modifiers(SOIL_PARAMS, surface)
+            is_forest  = forest_flags[idx]  if idx < len(forest_flags)  else False
+            slope_deg  = slope_degs[idx]    if idx < len(slope_degs)    else 0.0
+            dem        = aspect_results[idx] if idx < len(aspect_results) else None
+            aspect_deg, terrain_slope_deg = dem if dem is not None else (None, None)
+
+            soil_params = apply_surface_modifiers(
+                SOIL_PARAMS, surface,
+                is_forest=is_forest,
+                slope_deg=slope_deg,
+                aspect_deg=aspect_deg,
+                terrain_slope_deg=terrain_slope_deg,
+            )
             state = simulate_moisture(weather, soil_params)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
 
             results.append({
-                "lat": lat,
-                "lon": lon,
-                "elevation": elev,
+                "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
-                "surface": surface,
-                "moisture": state["moisture"],
-                "capacity": state["capacity"],
-                "wet_index": state["wet_index"],
-                "snow_cover": state["snow_cover"],
+                "surface":     surface,
+                "is_forest":   is_forest,
+                "slope_deg":   slope_deg,
+                "aspect_deg":  aspect_deg,
+                "moisture":    state["moisture"],
+                "capacity":    state["capacity"],
+                "wet_index":   state["wet_index"],
+                "snow_cover":  state["snow_cover"],
+                "stage2_days": state["stage2_days"],
                 "status_label": status_label,
-                "status_key": status_key,
+                "status_key":   status_key,
             })
 
             if verbose:
