@@ -32,6 +32,8 @@ from trail_moisture_v4 import (
     fetch_surface_type,
     fetch_surface_types_batch,
     fetch_weather_data_batch,
+    fetch_forest_flags_batch,
+    compute_slopes_for_sampled,
     apply_surface_modifiers,
     simulate_moisture,
     get_status,
@@ -164,6 +166,18 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
 
+    # Уклон для каждой точки из профиля высот GPX (ноль API-запросов)
+    slope_degs = compute_slopes_for_sampled(points, sampled)
+
+    # Относительная высота для эффекта укрытости ветром (-1..+1 от медианы)
+    all_elevs = [elev for _, _, elev, _ in sampled if elev and elev > 0]
+    if len(all_elevs) >= 2:
+        median_elev    = sorted(all_elevs)[len(all_elevs) // 2]
+        elev_half_range = max(1.0, (max(all_elevs) - min(all_elevs)) / 2)
+    else:
+        median_elev    = 0.0
+        elev_half_range = 1.0
+
     header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
     total = len(sampled)
     await message.edit_text(
@@ -187,9 +201,13 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
-    # Фаза 1: типы покрытий (один запрос к Overpass)
+    # Фаза 1а: типы покрытий (один запрос к Overpass)
     await message.edit_text(header + f"🗺 Запрашиваю типы покрытий для {total} точек...")
     surfaces = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+
+    # Фаза 1б: лесной полог (один батч-запрос к Overpass по bbox маршрута)
+    await message.edit_text(header + f"🌲 Проверяю лесной полог...")
+    forest_flags = await asyncio.to_thread(fetch_forest_flags_batch, lat_lon_pairs)
 
     # Фаза 2: погода только для грунтовых точек (один запрос к Open-Meteo)
     unpaved_indices = [
@@ -217,7 +235,10 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     progress_lines: list[str] = []
 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
-        surface = surfaces[idx]
+        surface    = surfaces[idx]
+        is_forest  = forest_flags[idx] if idx < len(forest_flags) else False
+        slope_deg  = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
+        elev_rel   = max(-1.0, min(1.0, ((elev or 0.0) - median_elev) / elev_half_range))
         try:
             if surface == "error":
                 skipped_paved += 1
@@ -234,13 +255,16 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
                 progress_lines.append(f"  км {dist_km:.1f} — ❌ нет данных погоды")
                 continue
 
-            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
+            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface,
+                                                 is_forest=is_forest, slope_deg=slope_deg)
+            point_soil["elev_rel"] = elev_rel
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             logger.info(
-                "point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                "point km=%.1f surface=%s forest=%s slope=%.1f° elev_rel=%.2f "
+                "cap=%.2f desorpt=%.2f snow_f=%.2f "
                 "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
-                dist_km, surface,
+                dist_km, surface, is_forest, slope_deg, elev_rel,
                 point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
                 state["moisture"], state["capacity"], state["snow_cover"],
                 status_key,
@@ -248,13 +272,17 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
-                "moisture": state["moisture"],
-                "capacity": state["capacity"],
-                "wet_index": state["wet_index"],
-                "snow_cover": state["snow_cover"],
-                "surface": surface,
+                "moisture":    state["moisture"],
+                "capacity":    state["capacity"],
+                "wet_index":   state["wet_index"],
+                "snow_cover":  state["snow_cover"],
+                "stage2_days": state["stage2_days"],
+                "surface":     surface,
+                "is_forest":   is_forest,
+                "slope_deg":   slope_deg,
+                "elev_rel":    elev_rel,
                 "status_label": status_label,
-                "status_key": status_key,
+                "status_key":   status_key,
             })
             progress_lines.append(f"  км {dist_km:.1f} — {_surface_icon(surface)} {surface} → {status_label}")
         except Exception as e:
@@ -344,10 +372,21 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     sampled = sample_points_by_distance(points, adaptive_sample_km(total_distance))
     total = len(sampled)
 
+    # Уклон и относительная высота (ноль API-запросов)
+    slope_degs = compute_slopes_for_sampled(points, sampled)
+    all_elevs = [elev for _, _, elev, _ in sampled if elev and elev > 0]
+    if len(all_elevs) >= 2:
+        median_elev     = sorted(all_elevs)[len(all_elevs) // 2]
+        elev_half_range = max(1.0, (max(all_elevs) - min(all_elevs)) / 2)
+    else:
+        median_elev     = 0.0
+        elev_half_range = 1.0
+
     # Текущее состояние по каждой точке — три батч-вызова вместо N*2
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
-    surfaces = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+    surfaces     = await asyncio.to_thread(fetch_surface_types_batch, lat_lon_pairs)
+    forest_flags = await asyncio.to_thread(fetch_forest_flags_batch,  lat_lon_pairs)
 
     unpaved_indices = [
         i for i, s in enumerate(surfaces)
@@ -368,7 +407,10 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
 
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
-        surface = surfaces[idx]
+        surface   = surfaces[idx]
+        is_forest = forest_flags[idx] if idx < len(forest_flags) else False
+        slope_deg = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
+        elev_rel  = max(-1.0, min(1.0, ((elev or 0.0) - median_elev) / elev_half_range))
         status_label = None
         try:
             if surface == "error":
@@ -386,13 +428,16 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
                     await on_progress(idx + 1, total, dist_km, surface, None)
                 continue
 
-            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface)
+            point_soil = apply_surface_modifiers(SOIL_PARAMS, surface,
+                                                 is_forest=is_forest, slope_deg=slope_deg)
+            point_soil["elev_rel"] = elev_rel
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             logger.info(
-                "batch point km=%.1f surface=%s cap=%.2f desorpt=%.2f snow_f=%.2f "
+                "batch point km=%.1f surface=%s forest=%s slope=%.1f° elev_rel=%.2f "
+                "cap=%.2f desorpt=%.2f snow_f=%.2f "
                 "moisture=%.2f capacity=%.2f snow_cover=%.1f → %s",
-                dist_km, surface,
+                dist_km, surface, is_forest, slope_deg, elev_rel,
                 point_soil["capacity"], point_soil["desorptivity"], point_soil["snow_factor"],
                 state["moisture"], state["capacity"], state["snow_cover"],
                 status_key,
@@ -400,10 +445,14 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
             results.append({
                 "lat": lat, "lon": lon, "elevation": elev,
                 "distance_km": dist_km,
-                "moisture": state["moisture"],
-                "capacity": state["capacity"],
-                "wet_index": state["wet_index"],
-                "snow_cover": state["snow_cover"],
+                "moisture":    state["moisture"],
+                "capacity":    state["capacity"],
+                "wet_index":   state["wet_index"],
+                "snow_cover":  state["snow_cover"],
+                "stage2_days": state["stage2_days"],
+                "is_forest":   is_forest,
+                "slope_deg":   slope_deg,
+                "elev_rel":    elev_rel,
                 "surface": surface,
                 "status_label": status_label,
                 "status_key": status_key,
