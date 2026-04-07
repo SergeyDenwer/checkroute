@@ -32,6 +32,7 @@ from trail_moisture_v4 import (
     compute_point_slopes,
     fetch_weather_data,
     fetch_terrain_info,
+    fetch_terrain_info_bulk,
     apply_surface_modifiers,
     apply_forest_modifiers,
     apply_slope_modifier,
@@ -170,6 +171,12 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     header = f"📍 Точек: {len(points)}, длина: {total_distance:.1f} км\n"
     total = len(sampled)
     await message.edit_text(
+        header + f"🗺 Загружаю карту покрытий ({total} точек)..."
+    )
+
+    terrain_list = await asyncio.to_thread(fetch_terrain_info_bulk, sampled)
+
+    await message.edit_text(
         header + f"🔬 Анализирую {total} контрольных точек...\n⏳ 0/{total}"
     )
 
@@ -191,7 +198,7 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         try:
-            terrain = await asyncio.to_thread(fetch_terrain_info, lat, lon)
+            terrain = terrain_list[idx]
             surface   = terrain["surface"]
             is_forest = terrain["is_forest"]
             leaf_type = terrain["leaf_type"]
@@ -342,13 +349,15 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     slopes  = compute_point_slopes(points, sampled)
     total = len(sampled)
 
+    terrain_list = await asyncio.to_thread(fetch_terrain_info_bulk, sampled)
+
     # Текущее состояние по каждой точке
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
         surface = None
         status_label = None
         try:
-            terrain = await asyncio.to_thread(fetch_terrain_info, lat, lon)
+            terrain = terrain_list[idx]
             surface   = terrain["surface"]
             is_forest = terrain["is_forest"]
             leaf_type = terrain["leaf_type"]
