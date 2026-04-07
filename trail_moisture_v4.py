@@ -233,33 +233,49 @@ def fetch_weather_data(lat, lon, days_back=14):
 
 
 def fetch_forecast(lat, lon, days_ahead=16):
-    """Получаем прогноз погоды. Retry с backoff при 429."""
+    """Получаем прогноз погоды для одной точки. Retry с backoff при 429."""
+    results = fetch_forecast_batch([{"lat": lat, "lon": lon}], days_ahead=days_ahead)
+    return results[0]
+
+
+def fetch_forecast_batch(points, days_ahead=16):
+    """Получаем прогноз для всех точек одним HTTP-запросом к Open-Meteo.
+
+    Open-Meteo принимает latitude/longitude как строки через запятую и возвращает
+    список объектов (по одному на точку). Это позволяет получить прогноз для N точек
+    за 1 запрос вместо N, избегая rate-limit.
+    """
+    _DAILY_VARS = ",".join([
+        "temperature_2m_max",
+        "temperature_2m_min",
+        "rain_sum",
+        "snowfall_sum",
+        "et0_fao_evapotranspiration",
+        "shortwave_radiation_sum",
+        "wind_speed_10m_mean",
+    ])
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "daily": ",".join([
-            "temperature_2m_max",
-            "temperature_2m_min",
-            "rain_sum",
-            "snowfall_sum",
-            "et0_fao_evapotranspiration",
-            "shortwave_radiation_sum",
-            "wind_speed_10m_mean",
-        ]),
+        "latitude":  ",".join(str(p["lat"]) for p in points),
+        "longitude": ",".join(str(p["lon"]) for p in points),
+        "daily": _DAILY_VARS,
         "wind_speed_unit": "ms",
         "forecast_days": days_ahead,
-        "timezone": "auto"
+        "timezone": "auto",
     }
 
     for attempt in range(4):
-        response = requests.get(url, params=params, timeout=15)
+        response = requests.get(url, params=params, timeout=30)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # Один объект для одной точки, список для нескольких
+            return data if isinstance(data, list) else [data]
         if response.status_code == 429:
             wait = 2 ** attempt  # 1, 2, 4, 8 секунд
-            logger.warning("fetch_forecast 429 rate-limit lat=%.4f lon=%.4f, retry in %ds (attempt %d/4)",
-                           lat, lon, wait, attempt + 1)
+            logger.warning(
+                "fetch_forecast_batch 429 rate-limit (%d points), retry in %ds (attempt %d/4)",
+                len(points), wait, attempt + 1,
+            )
             time.sleep(wait)
             continue
         raise Exception(f"Forecast API Error: {response.status_code}")
@@ -1012,35 +1028,25 @@ def forecast_trail_drying(results, verbose=True):
     Прогноз когда трейл станет сухим.
     Используем все non-paved точки — те же что для текущего статуса.
     """
-    valid = [r for r in results if "moisture" in r]
-    if not valid:
+    forecast_points = [r for r in results if "moisture" in r]
+    if not forecast_points:
         return None
 
-    # Ограничиваем до 3 точек (начало, середина, конец) — чтобы не долбить API
-    MAX_FORECAST_POINTS = 3
-    if len(valid) > MAX_FORECAST_POINTS:
-        step = len(valid) / MAX_FORECAST_POINTS
-        forecast_points = [valid[int(i * step)] for i in range(MAX_FORECAST_POINTS)]
-    else:
-        forecast_points = valid
-
     if verbose:
-        print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам (из {len(valid)})...")
-    
-    all_forecasts = []
-    _forecast_cache = {}  # (lat2, lon2) → forecast json
+        print(f"\n🔮 Прогноз высыхания по {len(forecast_points)} точкам (батч-запрос)...")
 
-    for idx, point in enumerate(forecast_points):
+    # Один HTTP-запрос для всех точек сразу
+    try:
+        batch_forecasts = fetch_forecast_batch(forecast_points, days_ahead=16)
+        logger.info("forecast_trail_drying: batch fetch OK, %d points → %d results",
+                    len(forecast_points), len(batch_forecasts))
+    except Exception as e:
+        logger.warning("forecast_trail_drying: batch fetch failed: %s", e)
+        return None
+
+    all_forecasts = []
+    for idx, (point, forecast) in enumerate(zip(forecast_points, batch_forecasts)):
         try:
-            cache_key = (round(point["lat"], 2), round(point["lon"], 2))
-            if cache_key in _forecast_cache:
-                forecast = _forecast_cache[cache_key]
-                logger.debug("forecast_trail_drying: cache hit for key=%s (km=%.1f)",
-                             cache_key, point.get("distance_km", 0))
-            else:
-                forecast = fetch_forecast(point["lat"], point["lon"], days_ahead=16)
-                _forecast_cache[cache_key] = forecast
-            
             initial_state = {
                 "moisture":    point["moisture"],
                 "capacity":    point["capacity"],
@@ -1058,13 +1064,11 @@ def forecast_trail_drying(results, verbose=True):
                 "point": point,
                 "forecast": forecast_results,
             })
-            
             if verbose:
                 print(f"   [{idx+1}/{len(forecast_points)}] км {point['distance_km']:.0f} ✓")
-        
         except Exception as e:
             logger.warning(
-                "forecast_trail_drying: point km=%.1f fetch failed: %s",
+                "forecast_trail_drying: point km=%.1f simulate failed: %s",
                 point.get("distance_km", 0), e,
             )
             if verbose:
