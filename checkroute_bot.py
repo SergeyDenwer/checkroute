@@ -399,6 +399,7 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     unpaved_pairs = [lat_lon_pairs[i] for i in unpaved_indices]
 
     weather_by_index: dict = {}
+    rain_now = False
     if unpaved_pairs:
         try:
             weather_batch = await asyncio.to_thread(
@@ -408,6 +409,12 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
                 weather_by_index[orig_idx] = weather_batch[list_pos]
         except Exception as e:
             logger.warning("batch weather error for route %s: %s", gpx_path, e)
+        try:
+            rain_now, _ = await asyncio.to_thread(
+                check_current_rain_batch, unpaved_pairs
+            )
+        except Exception as e:
+            logger.warning("batch rain check error for route %s: %s", gpx_path, e)
 
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
@@ -482,6 +489,8 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
     today_swamp = agg.get("swamp", {}).get("percent", 0)
     today_ci = compute_condition_index(today_dry, today_wet, today_mud, today_swamp)
     _, today_level = verdict_from_ci(today_ci)
+    if rain_now:
+        today_level = 0
 
     # Прогноз — берём меньше точек чтобы не долбить API
     tomorrow_ci    = today_ci
