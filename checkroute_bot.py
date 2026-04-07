@@ -231,10 +231,11 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
     progress_lines: list[str] = []
 
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
-        surface    = surfaces[idx]
-        is_forest  = forest_flags[idx] if idx < len(forest_flags) else False
-        slope_deg  = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
-        aspect_deg = aspect_degs[idx]  if idx < len(aspect_degs)  else None
+        surface   = surfaces[idx]
+        is_forest = forest_flags[idx] if idx < len(forest_flags) else False
+        slope_deg = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
+        _dem      = aspect_degs[idx]  if idx < len(aspect_degs)  else None
+        aspect_deg, terrain_slope_deg = _dem if _dem is not None else (None, None)
         try:
             if surface == "error":
                 skipped_paved += 1
@@ -254,7 +255,8 @@ async def analyze_gpx(gpx_path: str, message, route_name: str = ""):
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface,
                                                  is_forest=is_forest,
                                                  slope_deg=slope_deg,
-                                                 aspect_deg=aspect_deg)
+                                                 aspect_deg=aspect_deg,
+                                                 terrain_slope_deg=terrain_slope_deg)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             logger.info(
@@ -400,10 +402,11 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
 
     results = []
     for idx, (lat, lon, elev, dist_km) in enumerate(sampled):
-        surface    = surfaces[idx]
-        is_forest  = forest_flags[idx] if idx < len(forest_flags) else False
-        slope_deg  = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
-        aspect_deg = aspect_degs[idx]  if idx < len(aspect_degs)  else None
+        surface   = surfaces[idx]
+        is_forest = forest_flags[idx] if idx < len(forest_flags) else False
+        slope_deg = slope_degs[idx]   if idx < len(slope_degs)   else 0.0
+        _dem      = aspect_degs[idx]  if idx < len(aspect_degs)  else None
+        aspect_deg, terrain_slope_deg = _dem if _dem is not None else (None, None)
         status_label = None
         try:
             if surface == "error":
@@ -424,7 +427,8 @@ async def analyze_route_for_batch(gpx_path, tomorrow, saturday, sunday, on_progr
             point_soil = apply_surface_modifiers(SOIL_PARAMS, surface,
                                                  is_forest=is_forest,
                                                  slope_deg=slope_deg,
-                                                 aspect_deg=aspect_deg)
+                                                 aspect_deg=aspect_deg,
+                                                 terrain_slope_deg=terrain_slope_deg)
             state = simulate_moisture(weather, point_soil)
             status_label, status_key = get_status(state["moisture"], state["capacity"])
             logger.info(
