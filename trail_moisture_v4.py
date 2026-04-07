@@ -810,6 +810,115 @@ def _point_in_polygon(lat: float, lon: float, nodes: list) -> bool:
     return inside
 
 
+def fetch_surface_and_forest_batch(lat_lon_pairs: list):
+    """
+    ОДИН Overpass-запрос для всех точек: поверхности (highway around:30) +
+    лесной полог (natural=wood / landuse=forest по bbox маршрута).
+
+    Возвращает (surfaces: List[str], forest_flags: List[bool]) в том же порядке.
+
+    Объединение двух запросов в один снижает нагрузку на Overpass вдвое —
+    критично для /batch где 6 маршрутов × 2 запроса = 12 вызовов → rate limit.
+    С объединённым запросом: 6 вызовов → вписываемся в лимит.
+    """
+    if not lat_lon_pairs:
+        return [], []
+
+    lats = [lat for lat, lon in lat_lon_pairs]
+    lons = [lon for lat, lon in lat_lon_pairs]
+    bbox = f"{min(lats)-0.01},{min(lons)-0.01},{max(lats)+0.01},{max(lons)+0.01}"
+
+    # Секция highway: around:30 для каждой точки (как в fetch_surface_types_batch)
+    highway_clauses = "".join(
+        f"way(around:30,{lat},{lon})[highway];"
+        for lat, lon in lat_lon_pairs
+    )
+
+    # Объединённый запрос:
+    # .hways — highway ways для определения поверхности
+    # .forest_rels — лесные relation (крупные массивы через relations)
+    # .fways — forest ways (прямые + member ways из relations)
+    # Финальный union выдаёт оба набора в одном ответе
+    query = f"""[out:json][timeout:120];
+({highway_clauses})->.hways;
+(
+  relation[natural=wood]({bbox});
+  relation[landuse=forest]({bbox});
+)->.forest_rels;
+(
+  way[natural=wood]({bbox});
+  way[landuse=forest]({bbox});
+  way(r.forest_rels);
+)->.fways;
+(.hways; .fways;);
+out body geom;"""
+
+    if not _overpass_wait_for_slot(timeout=120):
+        logger.warning("fetch_surface_and_forest_batch: no Overpass slot → error/False")
+        return ["error"] * len(lat_lon_pairs), [False] * len(lat_lon_pairs)
+
+    elements = None
+    for attempt in range(5):
+        try:
+            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=120)
+        except Exception as e:
+            delay = min(5 * (attempt + 1), 60)
+            logger.warning("fetch_surface_and_forest_batch exception attempt %d: %s, retry in %ds",
+                           attempt + 1, e, delay)
+            time.sleep(delay)
+            continue
+
+        if resp.status_code == 429:
+            if not _overpass_wait_for_slot(timeout=120):
+                return ["error"] * len(lat_lon_pairs), [False] * len(lat_lon_pairs)
+            continue
+        if resp.status_code in (503, 504):
+            delay = min(5 * (attempt + 1), 60)
+            logger.warning("fetch_surface_and_forest_batch HTTP %s, retry in %ds", resp.status_code, delay)
+            time.sleep(delay)
+            continue
+        if resp.status_code != 200:
+            logger.warning("fetch_surface_and_forest_batch HTTP %s → error/False", resp.status_code)
+            return ["error"] * len(lat_lon_pairs), [False] * len(lat_lon_pairs)
+
+        elements = resp.json().get("elements", [])
+        break
+
+    if elements is None:
+        return ["error"] * len(lat_lon_pairs), [False] * len(lat_lon_pairs)
+
+    # Разделяем по наличию тега highway
+    highway_elements = [el for el in elements if "highway" in el.get("tags", {})]
+    forest_elements  = [el for el in elements if "highway" not in el.get("tags", {})]
+
+    # Поверхности: используем уже существующую логику _find_surface_for_point
+    surfaces = [
+        _find_surface_for_point(lat, lon, highway_elements, radius_m=30)
+        for lat, lon in lat_lon_pairs
+    ]
+
+    # Лесной полог: полигоны из forest_elements (минимум 3 узла)
+    polygons = [el["geometry"] for el in forest_elements if len(el.get("geometry", [])) >= 3]
+    if polygons:
+        forest_flags = [
+            any(_point_in_polygon(lat, lon, poly) for poly in polygons)
+            for lat, lon in lat_lon_pairs
+        ]
+        logger.info(
+            "fetch_surface_and_forest_batch: %d highway ways, %d forest polygons, "
+            "%d/%d points in forest",
+            len(highway_elements), len(polygons), sum(forest_flags), len(lat_lon_pairs),
+        )
+    else:
+        forest_flags = [False] * len(lat_lon_pairs)
+        logger.info(
+            "fetch_surface_and_forest_batch: %d highway ways, no forest polygons in bbox",
+            len(highway_elements),
+        )
+
+    return surfaces, forest_flags
+
+
 def fetch_forest_flags_batch(lat_lon_pairs: list) -> list:
     """
     Проверяет наличие лесного полога (OSM natural=wood / landuse=forest)
@@ -1078,12 +1187,8 @@ def analyze_trail(gpx_file, sample_km=5.0, verbose=True):
     lat_lon_pairs = [(lat, lon) for lat, lon, elev, dist_km in sampled]
 
     if verbose:
-        print(f"   Запрашиваю типы покрытий для {len(sampled)} точек (batch Overpass)...")
-    surfaces = fetch_surface_types_batch(lat_lon_pairs)
-
-    if verbose:
-        print(f"   Запрашиваю лесной полог (batch Overpass bbox)...")
-    forest_flags = fetch_forest_flags_batch(lat_lon_pairs)
+        print(f"   Запрашиваю покрытия и лесной полог для {len(sampled)} точек (batch Overpass)...")
+    surfaces, forest_flags = fetch_surface_and_forest_batch(lat_lon_pairs)
 
     if verbose:
         print(f"   Запрашиваю аспект склонов (SRTM DEM)...")
