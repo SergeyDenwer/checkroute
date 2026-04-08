@@ -14,6 +14,7 @@ import json
 import os
 import logging
 import tempfile
+import time
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -563,46 +564,22 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         route_name = os.path.splitext(gpx_file)[0].replace('_', ' ')
         gpx_path = os.path.join(ROUTES_DIR, gpx_file)
 
-        bar = "▓" * (file_idx) + "░" * (total_files - file_idx)
-        log_tail = "\n".join(done_lines[-6:])
-        try:
-            await status_msg.edit_text(
-                f"📊 Анализирую ({file_idx + 1}/{total_files})\n"
-                f"[{bar}]\n"
-                f"🔍 {route_name}...\n"
-                + (("\n" + log_tail) if log_tail else "")
-            )
-        except Exception:
-            pass
-
-        _SURFACE_ICONS = {
-            "asphalt": "🛣", "paved": "🛣", "concrete": "🛣", "sett": "🛣",
-            "gravel": "🪨", "fine_gravel": "🪨", "compacted": "🪨",
-            "ground": "🌱", "dirt": "🌱", "unpaved": "🌱", "grass": "🌿",
-            "sand": "🏖", "mud": "💧", "rock": "⛰", "error": "⚠️",
-        }
-
-        point_lines: list[str] = []
+        _last_progress_update = [0.0]
 
         async def on_point_progress(done, total_pts, dist_km, surface, status_label):
-            icon = _SURFACE_ICONS.get(surface or "", "❓")
-            if surface in PAVED_SURFACES:
-                line = f"    км {dist_km:.1f} — {icon} {surface} (пропущено)"
-            elif surface == "error" or surface is None:
-                line = f"    км {dist_km:.1f} — ⚠️ нет данных"
-            else:
-                line = f"    км {dist_km:.1f} — {icon} {surface} → {status_label}"
-            point_lines.append(line)
-            pt_bar = "▓" * done + "░" * (total_pts - done)
-            tail = "\n".join(point_lines[-4:])
+            # Обновляем каждые 10 точек + троттлинг 3 сек
+            if done % 10 != 0 and done < total_pts:
+                return
+            now = time.monotonic()
+            if done < total_pts and now - _last_progress_update[0] < 3.0:
+                return
+            _last_progress_update[0] = now
+            log_tail = "\n".join(done_lines[-5:])
             try:
                 await status_msg.edit_text(
-                    f"📊 Анализирую ({file_idx + 1}/{total_files})\n"
-                    f"[{bar}]\n"
-                    f"🔍 {route_name} — точка {done}/{total_pts}\n"
-                    f"  [{pt_bar}]\n"
-                    + tail
-                    + (("\n\n" + "\n".join(done_lines[-3:])) if done_lines else "")
+                    f"📊 Анализирую {file_idx + 1}/{total_files}: {route_name}\n"
+                    f"точки {done}/{total_pts}"
+                    + (("\n\n" + log_tail) if log_tail else "")
                 )
             except Exception:
                 pass
