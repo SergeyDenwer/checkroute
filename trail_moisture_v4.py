@@ -71,8 +71,8 @@ def parse_gpx(gpx_file):
 
 
 def adaptive_sample_km(total_km: float) -> float:
-    """Фиксированный шаг выборки 0.5 км для максимальной точности."""
-    return 0.5
+    """Фиксированный шаг выборки 0.2 км для максимальной точности."""
+    return 0.2
 
 
 def sample_points_by_distance(points, sample_km=5.0):
