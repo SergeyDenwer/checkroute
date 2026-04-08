@@ -71,16 +71,8 @@ def parse_gpx(gpx_file):
 
 
 def adaptive_sample_km(total_km: float) -> float:
-    """Шаг выборки в зависимости от длины маршрута."""
-
-    if total_km <= 50:
-        return 2.0
-    elif total_km <= 100:
-        return 3.0
-    elif total_km <= 150:
-        return 4.0
-    else:
-        return 5.0
+    """Фиксированный шаг выборки 0.5 км для максимальной точности."""
+    return 0.5
 
 
 def sample_points_by_distance(points, sample_km=5.0):
