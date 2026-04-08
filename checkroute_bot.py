@@ -583,6 +583,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         point_lines: list[str] = []
+        _last_progress_update = [0.0]   # mutable container for closure
 
         async def on_point_progress(done, total_pts, dist_km, surface, status_label):
             icon = _SURFACE_ICONS.get(surface or "", "❓")
@@ -593,6 +594,14 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 line = f"    км {dist_km:.1f} — {icon} {surface} → {status_label}"
             point_lines.append(line)
+
+            # Троттлинг: обновляем не чаще раза в 3 секунды
+            import time
+            now = time.monotonic()
+            if done < total_pts and now - _last_progress_update[0] < 3.0:
+                return
+            _last_progress_update[0] = now
+
             pt_bar = "▓" * done + "░" * (total_pts - done)
             tail = "\n".join(point_lines[-4:])
             try:
