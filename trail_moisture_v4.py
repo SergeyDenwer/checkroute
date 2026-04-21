@@ -432,6 +432,8 @@ OVERPASS_FALLBACK_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
+_OVERPASS_HEADERS = {"User-Agent": "CheckRouteBot/1.0 (trail moisture analysis)"}
+_OVERPASS_RETRY_CODES = {400, 406, 502, 503, 504}
 
 # OSM highway types that are implicitly paved even without a surface tag
 _PAVED_HIGHWAY_TYPES = {
@@ -451,7 +453,7 @@ def _overpass_wait_for_slot(timeout: int = 60) -> bool:
     consecutive_failures = 0
     while time.time() < deadline:
         try:
-            resp = requests.get(OVERPASS_STATUS_URL, timeout=5)
+            resp = requests.get(OVERPASS_STATUS_URL, timeout=5, headers=_OVERPASS_HEADERS)
             if resp.status_code != 200:
                 consecutive_failures += 1
                 if consecutive_failures >= 3:
@@ -490,14 +492,15 @@ def _overpass_wait_for_slot(timeout: int = 60) -> bool:
 
 
 def _overpass_post(query: str, timeout: int) -> requests.Response:
-    """POST-запрос к Overpass; при 5xx/недоступности пробует резервные серверы."""
+    """POST-запрос к Overpass; при ошибках сервера пробует резервные серверы."""
     urls = [OVERPASS_URL] + OVERPASS_FALLBACK_URLS
     last_resp = None
     last_exc = None
     for url in urls:
         try:
-            resp = requests.post(url, data={"data": query}, timeout=timeout)
-            if resp.status_code not in (502, 503, 504):
+            resp = requests.post(url, data={"data": query}, timeout=timeout,
+                                 headers=_OVERPASS_HEADERS)
+            if resp.status_code not in _OVERPASS_RETRY_CODES:
                 return resp
             last_resp = resp
             logger.warning("Overpass %s вернул HTTP %s, пробуем следующий", url, resp.status_code)
