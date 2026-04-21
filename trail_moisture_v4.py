@@ -10,6 +10,7 @@ Trail Moisture Index Calculator v4
 """
 
 import logging
+import re
 import time
 import requests
 from datetime import datetime, timedelta
@@ -427,6 +428,10 @@ SURFACE_SOIL_MODIFIERS = {
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_STATUS_URL = "https://overpass-api.de/api/status"
+OVERPASS_FALLBACK_URLS = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+]
 
 # OSM highway types that are implicitly paved even without a surface tag
 _PAVED_HIGHWAY_TYPES = {
@@ -439,37 +444,69 @@ _PAVED_HIGHWAY_TYPES = {
 def _overpass_wait_for_slot(timeout: int = 60) -> bool:
     """
     Проверяет статус Overpass API и ждёт освобождения слота.
-    Возвращает True если слот доступен, False если timeout истёк.
+    Возвращает True если слот доступен или статус-страница недоступна (оптимистично).
+    Возвращает False только если сервер явно сообщает об ожидании и timeout истёк.
     """
     deadline = time.time() + timeout
+    consecutive_failures = 0
     while time.time() < deadline:
         try:
             resp = requests.get(OVERPASS_STATUS_URL, timeout=5)
             if resp.status_code != 200:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    logger.warning(
+                        "Overpass status page недоступна (%d попыток, HTTP %s), продолжаем",
+                        consecutive_failures, resp.status_code,
+                    )
+                    return True
                 time.sleep(2)
                 continue
-            # Парсим строку вида "2 slots available now." или "Slot available after: 2026-03-10T..."
+            consecutive_failures = 0
             text = resp.text
             if "available now" in text:
                 return True
-            # Ищем время следующего слота
-            import re
             m = re.search(r"Slot available after: (\S+)", text)
             if m:
                 try:
                     slot_time = datetime.fromisoformat(m.group(1).rstrip("Z"))
                     wait = max(0, (slot_time - datetime.utcnow()).total_seconds()) + 1
-                    logger.info("Overpass: slot available in %.0fs, waiting...", wait)
+                    logger.info("Overpass: слот через %.0fs, ждём...", wait)
                     time.sleep(min(wait, deadline - time.time()))
                     continue
                 except ValueError:
                     pass
-            # Если не распарсили — ждём немного и пробуем снова
-            time.sleep(3)
+            # Формат ответа неизвестен — продолжаем оптимистично
+            logger.warning("Overpass status нераспознан, продолжаем: %.150s", text[:150])
+            return True
         except Exception as e:
-            logger.warning("Overpass status check failed: %s", e)
+            consecutive_failures += 1
+            logger.warning("Overpass status check failed (%d): %s", consecutive_failures, e)
+            if consecutive_failures >= 3:
+                logger.warning("Overpass status недоступен, продолжаем запрос")
+                return True
             time.sleep(3)
     return False
+
+
+def _overpass_post(query: str, timeout: int) -> requests.Response:
+    """POST-запрос к Overpass; при 5xx/недоступности пробует резервные серверы."""
+    urls = [OVERPASS_URL] + OVERPASS_FALLBACK_URLS
+    last_resp = None
+    last_exc = None
+    for url in urls:
+        try:
+            resp = requests.post(url, data={"data": query}, timeout=timeout)
+            if resp.status_code not in (502, 503, 504):
+                return resp
+            last_resp = resp
+            logger.warning("Overpass %s вернул HTTP %s, пробуем следующий", url, resp.status_code)
+        except Exception as e:
+            last_exc = e
+            logger.warning("Overpass %s недоступен: %s, пробуем следующий", url, e)
+    if last_resp is not None:
+        return last_resp
+    raise last_exc
 
 
 def fetch_surface_types_batch(lat_lon_pairs: list) -> list:
@@ -493,7 +530,7 @@ def fetch_surface_types_batch(lat_lon_pairs: list) -> list:
     elements = None
     for attempt in range(3):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=90)
+            resp = _overpass_post(query, timeout=90)
         except Exception as e:
             logger.warning("fetch_surface_types_batch exception attempt %d: %s", attempt + 1, e)
             return ["error"] * len(lat_lon_pairs)
@@ -702,7 +739,7 @@ def fetch_surface_type(lat: float, lon: float) -> str:
         return "error"
     for attempt in range(3):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=12)
+            resp = _overpass_post(query, timeout=12)
         except Exception as e:
             logger.warning("surface_type exception at (%.5f, %.5f): %s", lat, lon, e)
             return "error"
@@ -911,7 +948,7 @@ out body geom;"""
     elements = None
     for attempt in range(5):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=120)
+            resp = _overpass_post(query, timeout=120)
         except Exception as e:
             delay = min(5 * (attempt + 1), 60)
             logger.warning("fetch_surface_and_forest_batch exception attempt %d: %s, retry in %ds",
@@ -1010,7 +1047,7 @@ out body geom;"""
     elements = None
     for attempt in range(5):
         try:
-            resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=90)
+            resp = _overpass_post(query, timeout=90)
         except Exception as e:
             delay = min(5 * (attempt + 1), 30)
             logger.warning("fetch_forest_flags_batch exception attempt %d: %s, retry in %ds",
